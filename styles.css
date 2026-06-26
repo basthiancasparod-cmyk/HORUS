@@ -148,17 +148,21 @@ h1, h2, h3 {
 
 /* Sync bar */
 .sync-bar {
-  padding: 6px 18px;
+  padding: 8px 18px;
   font-size: 12px;
+  font-weight: 500;
   color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 6px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  transition: all 0.3s ease;
 }
 
-.sync-bar.syncing { color: var(--accent); }
-.sync-bar.success { color: #4CAF50; }
-.sync-bar.error { color: var(--c-B); }
+.sync-bar.syncing { color: var(--accent); background: var(--accent-soft); }
+.sync-bar.success { color: #4CAF50; background: rgba(76,175,80,0.1); }
+.sync-bar.error { color: var(--c-B); background: rgba(239,91,91,0.1); }
 
 /* ======================== MONTH NAV ======================== */
 .month-nav {

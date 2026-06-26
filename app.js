@@ -92,7 +92,9 @@ async function authFetch(url, opts) {
 async function syncDown() {
   if (!user) return
   try {
-    const r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data?select=data,updated_at&user_id=${user.id}`, {})
+    const r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data?select=data,updated_at&user_id=eq.${user.id}`, {})
+    if (r.status === 401) { logout(); return }
+    if (r.status === 400) { const e=await r.json(); throw new Error(e.message||'Error de configuración de BD') }
     if (!r.ok) throw new Error(`HTTP ${r.status}`)
     const d = await r.json()
     if (d.length && d[0].data) {
@@ -140,16 +142,18 @@ async function syncUp() {
   try {
     state._savedAt = Date.now()
     const body = JSON.stringify({ data: state, updated_at: new Date().toISOString() })
-    let r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${user.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body
-    })
+    const h = { 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' }
+    let r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${user.id}`, { method: 'PATCH', headers: h, body })
+    if (r.status === 401) { logout(); return }
+    if (r.status === 400) { const e=await r.json(); throw new Error(e.message||'Error de configuración') }
     const txt = await r.text()
-    if (txt === '[]') {
-      await authFetch(`${SUPABASE_URL}/rest/v1/user_data`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: user.id, data: state, updated_at: new Date().toISOString() })
+    if (txt === '[]' || r.status === 404) {
+      r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data`, {
+        method: 'POST', headers: h, body: JSON.stringify({ user_id: user.id, data: state, updated_at: new Date().toISOString() })
       })
+      if (!r.ok) { const e=await r.json(); throw new Error(e.message||'Error al crear') }
     }
-  } catch(e) { console.log('Sync up error:', e) }
+  } catch(e) { console.error('Sync up error:', e); showToast('✗ Error al guardar en la nube') }
 }
 
 // --- AUTH UI ---
@@ -306,9 +310,9 @@ $('syncBtn').onclick = async () => {
   if(syncing)return;syncing=true
   const btn=$('syncBtn'),icon=btn.querySelector('svg'),b=$('syncBar'),m=$('syncMsg')
   btn.disabled=true;icon.classList.add('spinning');b.style.display='flex';b.className='sync-bar syncing';m.textContent='Sincronizando...'
-  try{await syncDown();await syncUp();m.textContent='✓ Sincronizado';b.className='sync-bar success'}
-  catch(e){m.textContent='✗ Error';b.className='sync-bar error'}
-  setTimeout(()=>{b.style.display='none';b.className='sync-bar';icon.classList.remove('spinning');btn.disabled=false;syncing=false},2000)
+  try{await syncDown();await syncUp();renderAll();b.className='sync-bar success';m.textContent='✓ Sincronizado correctamente'}
+  catch(e){b.className='sync-bar error';m.textContent='✗ Error: '+e.message}
+  setTimeout(()=>{b.style.display='none';b.className='sync-bar';icon.classList.remove('spinning');btn.disabled=false;syncing=false},2500)
 }
 
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('daySheet').classList.contains('open'))cs()})
