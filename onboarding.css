@@ -1,0 +1,129 @@
+/* ============================================================
+   HORUS — Onboarding Screen Styles
+   ============================================================ */
+
+#s-onboarding {
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.onboarding-container {
+  width: 100%;
+  max-width: 400px;
+}
+
+.onboarding-progress {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 40px;
+}
+
+.onboarding-step {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 2px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-dim);
+  transition: all 0.3s;
+}
+
+.onboarding-step.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.onboarding-step.done {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.onboarding-content { display: none; }
+.onboarding-content.active { display: block; }
+
+.onboarding-content h2 {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.onboarding-sub {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin: 6px 0 0;
+}
+
+.onboarding-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 32px;
+  gap: 12px;
+}
+
+.chip-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.chip-input-row input {
+  flex: 1;
+  padding: 11px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: 'Inter', sans-serif;
+}
+
+.chip-input-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.member-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.member-tag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-soft);
+  border: 1px solid rgba(242,163,60,0.2);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.member-tag button {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0;
+  line-height: 1;
+}
+
+.member-tag button:hover { color: var(--c-B); }
+
+.onboarding-notif-preview {
+  margin-top: 8px;
+}

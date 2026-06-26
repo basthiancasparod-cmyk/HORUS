@@ -1,0 +1,109 @@
+/* ============================================================
+   HORUS — Auth Screen Styles
+   ============================================================ */
+
+#s-auth {
+  justify-content: center;
+  align-items: center;
+  padding: 24px;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.auth-container {
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+}
+
+.auth-logo {
+  margin-bottom: 32px;
+}
+
+.auth-logo svg {
+  color: var(--accent);
+  margin-bottom: 12px;
+}
+
+.auth-logo h1 {
+  font-size: 32px;
+  font-weight: 800;
+  background: linear-gradient(135deg, var(--accent) 0%, #C77DFF 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.auth-tagline {
+  color: var(--text-dim);
+  font-size: 14px;
+  margin: 6px 0 0;
+}
+
+.auth-tabs {
+  display: flex;
+  background: var(--panel);
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  background: none;
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: 'Inter', sans-serif;
+}
+
+.auth-tab.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+#authForm {
+  text-align: left;
+}
+
+#authForm .field {
+  margin-bottom: 14px;
+}
+
+#authForm .field label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-bottom: 5px;
+  font-weight: 500;
+}
+
+#authForm .field input {
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: 'Inter', sans-serif;
+  transition: border 0.2s;
+}
+
+#authForm .field input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.auth-error {
+  font-size: 13px;
+  color: var(--c-B);
+  margin: 8px 0;
+  min-height: 20px;
+}
