@@ -803,7 +803,13 @@ select {
 .switch:focus-visible,
 .icon-btn:focus-visible,
 .bottom-nav button:focus-visible,
-.btn:focus-visible {
+.btn:focus-visible,
+.auth-tab:focus-visible,
+.member-tag button:focus-visible,
+.toggle-row button:focus-visible,
+.permission-banner button:focus-visible,
+.add-profile-row button:focus-visible,
+.profile-chip:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
