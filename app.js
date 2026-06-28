@@ -215,14 +215,14 @@ async function afterLogin() {
 let _int1,_int2
 function enterApp() {
   show('s-app')
+  const name=state.activeProfile||(user?user.email.split('@')[0]:'')
+  $('heroGreeting').textContent=name?`Hola ${esc(name)}`:'Hola'
   renderAll()
   sa()
   _int1=setInterval(()=>sa(),60000)
   _int2=setInterval(()=>{
     const now=new Date()
     const dt=$('dtTime');if(dt)dt.textContent=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`
-    const row=document.querySelector('.day-row.is-today .now-line')
-    if(row){const nm=now.getHours()*60+now.getMinutes();row.style.left=`${(nm/1440*100).toFixed(2)}%`}
   },10000)
 }
 
@@ -262,7 +262,7 @@ $('onboardingNotifSwitch').addEventListener('click',async function(){
 })
 
 // --- CALENDARIO ---
-const DOW=['D','L','M','X','J','V','S'], MON=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+const DOW=['D','L','M','X','J','V','S'], DOW_SHORT=['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'], MON=['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
 let cm=new Date().getMonth(), cy=new Date().getFullYear(), adk=null, pb=[], st=[]
 function key(y,m,d){return`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
 function tk(){const t=new Date();return key(t.getFullYear(),t.getMonth(),t.getDate())}
@@ -272,15 +272,21 @@ function gd(k){return state.days[k]||{date:k,sc:null,dt:'normal',notes:''}}
 function gb(d){if(d.dt!=='normal')return d.sc==='P'?(d.bo||[]):(d.dtb||[]);if(d.sc==='P'||d.sc==='RE')return d.bo||[];if(d.sc&&_hasST(d.sc))return d.bo?.length?d.bo:state.shiftTypes[d.sc].blocks;return[]}
 function cal(){
   const c=$('calendarList');if(!c)return;c.innerHTML='';$('monthLabel').textContent=`${MON[cm]} ${cy}`
-  const dim=new Date(cy,cm+1,0).getDate(),t=tk(),nm=tm(`${String(new Date().getHours()).padStart(2,'0')}:${String(new Date().getMinutes()).padStart(2,'0')}`)
-  // Draw timeline axis
-  const ax=$('timelineAxis');if(ax){ax.innerHTML='';for(let h=0;h<24;h+=3)ax.innerHTML+=`<span style="left:${(h/24*100).toFixed(2)}%">${String(h).padStart(2,'0')}:00</span>`;ax.innerHTML+=`<span style="left:${(23.5/24*100).toFixed(2)}%">24:00</span>`}
-  // Day rows
-  for(let d=1;d<=dim;d++){const k=key(cy,cm,d),day=gd(k),isT=k===t,isE=day.dt!=='normal',row=document.createElement('div');row.className=`day-row${isT?' is-today':''}${isE?' is-exception':''}${!day.sc&&!isE?' empty':''}`;const bl=gb(day),bg=hx(isE?'#F2A33C':(_hasST(day.sc)?state.shiftTypes[day.sc].hex:'#888'));const th=bl.flatMap(b=>{const sm=tm(b.start),em0=tm(b.end);if(em0>sm)return[{s:sm,e:em0,l:em0-sm>120?`${esc(b.start)}-${esc(b.end)}`:''}];return[{s:sm,e:1440,l:`${esc(b.start)}-${esc(b.end)}`},{s:0,e:em0,l:''}]}).map(({s,e,l})=>`<div class="block" style="left:${(s/1440*100).toFixed(2)}%;width:${((e-s)/1440*100).toFixed(2)}%;background:${bg}">${l?`<span class="block-label">${l}</span>`:''}</div>`).join('');let tag=day.sc?`<span class="tag" style="background:${bg}">${esc(day.sc)}</span>`:'—';if(isE)tag=day.dt==='feriado'?'FER':'EVT';const noteIcon=day.notes?`<span class="note-icon">📝</span>`:'';row.innerHTML=`<div><div class="day-num">${d}</div><div class="day-dow">${DOW[new Date(cy,cm,d).getDay()]}</div></div><div class="day-track">${th}${isT?`<div class="now-line" style="left:${(nm/1440*100).toFixed(2)}%"></div>`:''}</div><div class="day-code">${noteIcon}${tag}</div>`;row.addEventListener('click',()=>od(k));c.appendChild(row)}
-  // Update dashboard
-  updateDashboard()
+  const dim=new Date(cy,cm+1,0).getDate(),t=tk()
+  for(let d=1;d<=dim;d++){
+    const k=key(cy,cm,d),day=gd(k),isT=k===t,isE=day.dt!=='normal',row=document.createElement('div')
+    row.className=`day-card${isT?' is-today':''}${isE?' is-exception':''}${!day.sc&&!isE?' empty':''}`
+    const bl=gb(day),bg=hx(isE?'#F2A33C':(_hasST(day.sc)?state.shiftTypes[day.sc].hex:'#888'))
+    let label='Sin turno',time=''
+    if(isE){label=day.dt==='feriado'?'Feriado':'Evento';if(bl.length)time=bl.map(b=>`${b.start}–${b.end}`).join(' · ')}
+    else if(day.sc&&_hasST(day.sc)){label=state.shiftTypes[day.sc].label;if(bl.length)time=bl.map(b=>`${b.start}–${b.end}`).join(' · ')}
+    const note=day.notes?`<span class="note">📝 ${esc(day.notes)}</span>`:''
+    const badge=isE?'🎉':(day.sc?esc(day.sc):'—')
+    row.innerHTML=`<div class="date"><span class="num">${d}</span><span class="dow">${DOW_SHORT[new Date(cy,cm,d).getDay()]}</span></div><div class="info"><h4>${esc(label)}</h4>${time?`<span class="time">${esc(time)}</span>`:''}${note}</div><div class="badge" style="background:${bg}">${badge}</div>`
+    row.addEventListener('click',()=>od(k));c.appendChild(row)
+  }
+  updateDashboard();renderWeekStrip();renderStats()
 }
-function leg(){const e=$('legend');if(!e)return;e.innerHTML=Object.values(state.shiftTypes).map(s=>`<span><span class="dot" style="background:${hx(s.hex)}"></span>${esc(s.code)} · ${esc(s.label)}</span>`).join('')}
 
 function updateDashboard(){
   const dt=$('dashboardToday');if(!dt)return
@@ -295,6 +301,40 @@ function updateDashboard(){
   if(day.notes){$('dtNotes').textContent='📝 '+day.notes;$('dtNotes').style.display='block'}
   else $('dtNotes').style.display='none'
 }
+function renderWeekStrip(){
+  const e=$('weekStrip');if(!e)return
+  const now=new Date(),today=tk()
+  const monday=new Date(now);monday.setDate(monday.getDate()-((monday.getDay()+6)%7))
+  e.innerHTML=''
+  for(let i=0;i<7;i++){
+    const d=new Date(monday);d.setDate(d.getDate()+i)
+    const k=key(d.getFullYear(),d.getMonth(),d.getDate()),isT=k===today
+    const day=gd(k),bg=day.sc&&_hasST(day.sc)?state.shiftTypes[day.sc].hex:''
+    const el=document.createElement('div')
+    el.className=`week-day${isT?' is-today':''}`
+    el.innerHTML=`<span class="dow">${DOW_SHORT[d.getDay()]}</span><span class="num">${d.getDate()}</span>${bg?`<span class="dot" style="background:${hx(bg)}"></span>`:''}`
+    el.addEventListener('click',()=>{cm=d.getMonth();cy=d.getFullYear();cal()})
+    e.appendChild(el)
+  }
+}
+function renderStats(){
+  const e=$('statsRow');if(!e)return
+  const dim=new Date(cy,cm+1,0).getDate()
+  let total=0,hours=0,counts={}
+  for(let d=1;d<=dim;d++){
+    const k=key(cy,cm,d),day=gd(k)
+    if(day.sc&&_hasST(day.sc)){
+      total++
+      const bl=gb(day)
+      bl.forEach(b=>{const s=tm(b.start),en=tm(b.end);const diff=en>s?en-s:(1440-s+en);hours+=diff})
+      counts[day.sc]=(counts[day.sc]||0)+1
+    }
+  }
+  let html=`<div class="stat-item"><div class="stat-val">${total}</div><div class="stat-label">Turnos</div></div>`
+  html+=`<div class="stat-item"><div class="stat-val">${Math.round(hours/60)}h</div><div class="stat-label">Horas</div></div>`
+  Object.values(state.shiftTypes).forEach(s=>{if(counts[s.code])html+=`<div class="stat-item"><div class="stat-val" style="color:${hx(s.hex)}">${counts[s.code]}</div><div class="stat-label">${esc(s.code)}</div></div>`})
+  e.innerHTML=html
+}
 
 // --- SHEET ---
 function od(k){adk=k;const day=gd(k);pb=JSON.parse(JSON.stringify(gb(day)));const[y,m,d]=k.split('-').map(Number);$('sheetTitle').textContent=`${d} de ${MON[m-1]}`;$('sheetSub').textContent=new Date(y,m-1,d).toLocaleDateString('es-ES',{weekday:'long'});$('sheetNotes').value=day.notes||'';const cr=$('shiftChips');cr.innerHTML=Object.values(state.shiftTypes).map(s=>`<button class="chip${day.sc===s.code?' selected':''}" data-code="${esc(s.code)}"><span class="dot" style="background:${hx(s.hex)}"></span>${esc(s.label)}</button>`).join('')+'<button class="chip'+(!day.sc?' selected':'')+'" data-code="">Sin turno</button>';cr.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{cr.querySelectorAll('.chip').forEach(x=>x.classList.remove('selected'));c.classList.add('selected');day.sc=c.dataset.code||null;const isE=day.dt!=='normal',ed=isE||day.sc==='P'||day.sc==='RE';if(isE&&day.sc!=='P')pb=day.dtb?.length?day.dtb:[{start:'08:30',end:'17:00'}];else if(day.sc==='P')pb=day.bo?.length?day.bo:[{start:'08:30',end:'13:00'},{start:'17:00',end:'21:00'}];else if(day.sc==='RE')pb=day.bo?.length?day.bo:[{start:'08:30',end:'17:00'}];else if(day.sc)pb=JSON.parse(JSON.stringify(state.shiftTypes[day.sc].blocks));else pb=[];rb(ed)}));const tr=$('dayTypeToggle');tr.querySelectorAll('button').forEach(b=>{b.classList.toggle('active',b.dataset.type===(day.dt||'normal'));b.onclick=()=>{tr.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');day.dt=b.dataset.type;const isE=day.dt!=='normal';if(isE&&day.sc!=='P')pb=day.dtb?.length?day.dtb:[{start:'08:30',end:'17:00'}];else if(day.sc==='P')pb=day.bo?.length?day.bo:[{start:'08:30',end:'13:00'},{start:'17:00',end:'21:00'}];else if(!isE&&day.sc)pb=JSON.parse(JSON.stringify(state.shiftTypes[day.sc]?.blocks||[]));rb(isE||day.sc==='P'||day.sc==='RE')}});rb(day.dt!=='normal'||day.sc==='P'||day.sc==='RE');$('btnDeleteDay').onclick=()=>{if(!confirm('¿Eliminar este día?'))return;delete state.days[k];saveState();cs();cal()};$('btnSaveDay').onclick=()=>{day.notes=$('sheetNotes').value.trim();const isE=day.dt!=='normal';if(isE&&day.sc!=='P')day.dtb=pb;else if(day.sc==='P'||day.sc==='RE')day.bo=pb;if(!day.sc&&day.dt==='normal'&&!day.notes)delete state.days[adk];else state.days[adk]=day;saveState();cs();cal();sa()};$('sheetBackdrop').classList.add('open');$('daySheet').classList.add('open')}
@@ -307,7 +347,7 @@ function showToast(msg){
   t.style.cssText='position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:10px 20px;border-radius:999px;font-size:13px;z-index:100;'
   document.body.appendChild(t);setTimeout(()=>t.remove(),2000)
 }
-function rc(){const e=$('catalogList');if(!e)return;e.innerHTML=Object.values(state.shiftTypes).map(s=>{const na=s.code==='V'||s.code==='B'||s.code==='P',b=s.blocks[0]||{start:'',end:''};return`<div class="shift-card"><span class="swatch" style="background:${hx(s.hex)}"></span><div class="meta"><div class="name">${esc(s.label)} <span style="color:var(--text-dim);font-weight:400">(${esc(s.code)})</span></div><div class="hours">${na?'Sin horario fijo':'Horario por defecto'}</div></div>${na?'':`<input type="time" data-code="${esc(s.code)}" data-k="start" value="${esc(b.start)}"><input type="time" data-code="${esc(s.code)}" data-k="end" value="${esc(b.end)}">`}</div>`}).join('');e.querySelectorAll('input[type=time]').forEach(inp=>inp.addEventListener('change',e=>{const c=e.target.dataset.code,k=e.target.dataset.k;if(!state.shiftTypes[c].blocks[0])state.shiftTypes[c].blocks[0]={start:'',end:''};state.shiftTypes[c].blocks[0][k]=e.target.value;saveState();cal();showToast('✓ Guardado')}))}
+function rc(){const e=$('catalogList');if(!e)return;e.innerHTML=Object.values(state.shiftTypes).map(s=>{const na=s.code==='V'||s.code==='B'||s.code==='P',b=s.blocks[0]||{start:'',end:''};return`<div class="catalog-card"><span class="swatch" style="background:${hx(s.hex)}"></span><div class="meta"><div class="name">${esc(s.label)} <span style="color:var(--text-dim);font-weight:400">(${esc(s.code)})</span></div><div class="hours">${na?'Sin horario fijo':'Horario por defecto'}</div></div>${na?'':`<input type="time" data-code="${esc(s.code)}" data-k="start" value="${esc(b.start)}"><input type="time" data-code="${esc(s.code)}" data-k="end" value="${esc(b.end)}">`}</div>`}).join('');e.querySelectorAll('input[type=time]').forEach(inp=>inp.addEventListener('change',e=>{const c=e.target.dataset.code,k=e.target.dataset.k;if(!state.shiftTypes[c].blocks[0])state.shiftTypes[c].blocks[0]={start:'',end:''};state.shiftTypes[c].blocks[0][k]=e.target.value;saveState();cal();showToast('✓ Guardado')}))}
 
 // --- SETTINGS ---
 function rs(){const pr=$('profileRow');if(!pr)return;pr.innerHTML=state.profiles.map(p=>`<label class="profile-chip${state.activeProfile===p?' active':''}"><input type="radio" name="profile" value="${esc(p)}"${state.activeProfile===p?' checked':''}>${esc(p)}</label>`).join('');pr.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',e=>{state.activeProfile=e.target.value;saveState();rs();$('profilePill').textContent=state.activeProfile}));$('btnAddProfile').onclick=()=>{const i=$('newProfileName'),n=i.value.trim();if(!n)return;if(!state.profiles.includes(n))state.profiles.push(n);state.activeProfile=n;i.value='';saveState();rs()};const pb=$('permBanner');if('Notification'in window&&Notification.permission!=='granted'){pb.style.display='flex';pb.querySelector('button').onclick=async()=>{if((await Notification.requestPermission())==='granted'){state.settings.notificationsEnabled=true;saveState();rs();sa()}}}else pb.style.display='none';const ns=$('notifSwitch');ns.classList.toggle('on',state.settings.notificationsEnabled);ns.onclick=()=>{if(Notification.permission!=='granted'){alert('Concede permiso arriba.');return};state.settings.notificationsEnabled=!state.settings.notificationsEnabled;saveState();rs();sa()};const ms=$('minutesBefore');ms.value=state.settings.alarmMinutesBefore;ms.onchange=e=>{state.settings.alarmMinutesBefore=Number(e.target.value);saveState();sa()};if(user)$('userEmailDisplay').textContent=user.email}
@@ -337,11 +377,11 @@ document.getElementById('btnCancelDay').addEventListener('click',cs)
 document.getElementById('themeToggle').onclick=()=>{theme=theme==='dark'?'light':'dark';applyTheme(theme);ut()}
 document.getElementById('settingsThemeSwitch').onclick=()=>{theme=theme==='dark'?'light':'dark';applyTheme(theme);ut()}
 function ut(){const sw=$('settingsThemeSwitch');if(sw)sw.classList.toggle('on',theme==='dark')}
-function sv(n){document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===`view-${n}`));document.querySelectorAll('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===n));if(n==='calendar'){updateDashboard()}if(n==='catalog')rc();if(n==='settings')rs()}
+function sv(n){document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===`view-${n}`));document.querySelectorAll('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===n));if(n==='calendar'){updateDashboard();renderWeekStrip();renderStats()}if(n==='catalog')rc();if(n==='settings')rs()}
 
 // Make switches keyboard-accessible
 document.querySelectorAll('.switch').forEach(s=>{s.setAttribute('role','switch');s.setAttribute('tabindex','0');s.setAttribute('aria-checked',s.classList.contains('on'));s.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();s.click()}});const obs=new MutationObserver(()=>s.setAttribute('aria-checked',s.classList.contains('on')));obs.observe(s,{attributes:true,attributeFilter:['class']})})
-function renderAll(){cal();leg();$('profilePill').textContent=state.activeProfile}
+function renderAll(){cal();$('profilePill').textContent=state.activeProfile}
 
 // --- SERVICE WORKER ---
 if ('serviceWorker' in navigator) {
