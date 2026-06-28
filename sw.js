@@ -1,4 +1,4 @@
-const CACHE = 'horus-v3';
+const CACHE = 'horus-v3.0.1';
 const ASSETS = ['./', './index.html', './styles.css', './auth.css', './onboarding.css', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (e) => {
