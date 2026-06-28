@@ -463,6 +463,10 @@ h1, h2, h3 {
   padding: 13px;
 }
 
+.btn-full {
+  width: 100%;
+}
+
 /* ======================== CATALOG ======================== */
 .shift-card {
   background: var(--panel);

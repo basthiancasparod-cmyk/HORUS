@@ -8,7 +8,7 @@ const ONBOARDING_KEY = 'horus_onboarding_done'
 const AUTH_KEY = 'horus_auth'
 
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
-function hx(c){return/^#[0-9A-Fa-f]{6}$/.test(c)?c:'#888'}
+function hx(c){return /^#[0-9A-Fa-f]{6}$/.test(c)?c:'#888'}
 
 const OLD_HC = ['Javier','Alejandra','Sergio','Yorbelis','Luz']
 function cleanProfiles(saved) {
@@ -72,13 +72,13 @@ async function refreshToken() {
 
 async function login(email, password) {
   const r = await supabaseFetch('/auth/v1/token?grant_type=password', { email, password })
-  if (!r.ok) { const e=await r.json(); throw new Error(e.error_description||e.msg||'Error') }
+  if (!r.ok) { const e=await r.json(); throw new Error(e.error_description||e.message||e.msg||'Error') }
   return r.json()
 }
 
 async function signup(email, password) {
   const r = await supabaseFetch('/auth/v1/signup', { email, password })
-  if (!r.ok) { const e=await r.json(); throw new Error(e.msg||'Error') }
+  if (!r.ok) { const e=await r.json(); throw new Error(e.message||e.msg||'Error') }
 }
 
 async function authFetch(url, opts) {
@@ -177,7 +177,7 @@ document.querySelectorAll('.auth-tab').forEach(t => {
 $('authForm').addEventListener('submit', async e => {
   e.preventDefault()
   const btn = $('authSubmit'), err = $('authError')
-  btn.disabled = true; btn.textContent = 'Espera...'; err.textContent = ''
+  btn.disabled = true; btn.textContent = 'Espera...'; err.textContent = ''; err.style.color = 'var(--c-B)'
   try {
     const email = $('authEmail').value.trim(), pw = $('authPassword').value
     const isLogin = document.querySelector('.auth-tab.active')?.dataset.tab === 'login'
@@ -192,13 +192,13 @@ $('authForm').addEventListener('submit', async e => {
       err.textContent = 'Cuenta creada. Revisa tu email.'
       err.style.color = '#4CAF50'
     }
-  } catch(e) { err.textContent = e.message }
+  } catch(e) { err.textContent = e.message; err.style.color = 'var(--c-B)' }
   btn.disabled = false; btn.textContent = document.querySelector('.auth-tab.active')?.dataset.tab==='login'?'Iniciar sesión':'Crear cuenta'
 })
 
 $('logoutBtn').onclick = logout
 $('settingsLogout').onclick = logout
-async function logout() { clearInterval(_int1);clearInterval(_int2); saveAuth(null); state = defaultState(); saveState(); show('s-auth') }
+async function logout() { clearInterval(_int1);clearInterval(_int2); st.forEach(t=>clearTimeout(t)); st=[]; saveAuth(null); state = defaultState(); saveState(); show('s-auth') }
 
 // --- FLUJO ---
 async function afterLogin() {
@@ -229,7 +229,7 @@ function enterApp() {
 // --- ONBOARDING ---
 let oStep=0, oMembers=[]
 function renderOMembers() {
-  $('onboardingMemberList').innerHTML = oMembers.map((m,i)=>`<span class="member-tag">${esc(m)}<button data-i="${i}">×</button></span>`).join('')
+  $('onboardingMemberList').innerHTML = oMembers.map((m,i)=>`<span class="member-tag">${esc(m)}<button data-i="${i}" aria-label="Eliminar ${esc(m)}">×</button></span>`).join('')
   document.querySelectorAll('.member-list button').forEach(b=>b.addEventListener('click',()=>{oMembers.splice(Number(b.dataset.i),1);renderOMembers()}))
 }
 function goOnboarding(s) {
@@ -252,6 +252,7 @@ $('onboardingNext').addEventListener('click',()=>{
 })
 $('onboardingPrev').addEventListener('click',()=>{if(oStep>0)goOnboarding(oStep-1)})
 $('onboardingAddMember').addEventListener('click',()=>{const i=$('onboardingMemberInput'),n=i.value.trim();if(!n)return;if(oMembers.includes(n)){alert('Ya existe');return};if(oMembers.length>=20){alert('Máximo 20 miembros');return};oMembers.push(n);i.value='';renderOMembers()})
+$('onboardingMemberInput').addEventListener('keydown',e=>{if(e.key==='Enter'){$('onboardingAddMember').click()}})
 $('onboardingNotifSwitch').addEventListener('click',async function(){
   if(!this.classList.contains('on')&&Notification.permission!=='granted'){
     const p=await Notification.requestPermission();
@@ -265,7 +266,7 @@ const DOW=['D','L','M','X','J','V','S'], MON=['Enero','Febrero','Marzo','Abril',
 let cm=new Date().getMonth(), cy=new Date().getFullYear(), adk=null, pb=[], st=[]
 function key(y,m,d){return`${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`}
 function tk(){const t=new Date();return key(t.getFullYear(),t.getMonth(),t.getDate())}
-function tm(t){const[h,m]=t.split(':').map(Number);return h*60+m}
+function tm(t){const[h,m]=t.split(':').map(Number);if(isNaN(h)||isNaN(m)||h<0||h>23||m<0||m>59)return 0;return h*60+m}
 function _hasST(sc){return Object.prototype.hasOwnProperty.call(state.shiftTypes,sc)}
 function gd(k){return state.days[k]||{date:k,sc:null,dt:'normal',notes:''}}
 function gb(d){if(d.dt!=='normal')return d.sc==='P'?(d.bo||[]):(d.dtb||[]);if(d.sc==='P'||d.sc==='RE')return d.bo||[];if(d.sc&&_hasST(d.sc))return d.bo?.length?d.bo:state.shiftTypes[d.sc].blocks;return[]}
@@ -297,7 +298,7 @@ function updateDashboard(){
 
 // --- SHEET ---
 function od(k){adk=k;const day=gd(k);pb=JSON.parse(JSON.stringify(gb(day)));const[y,m,d]=k.split('-').map(Number);$('sheetTitle').textContent=`${d} de ${MON[m-1]}`;$('sheetSub').textContent=new Date(y,m-1,d).toLocaleDateString('es-ES',{weekday:'long'});$('sheetNotes').value=day.notes||'';const cr=$('shiftChips');cr.innerHTML=Object.values(state.shiftTypes).map(s=>`<button class="chip${day.sc===s.code?' selected':''}" data-code="${esc(s.code)}"><span class="dot" style="background:${hx(s.hex)}"></span>${esc(s.label)}</button>`).join('')+'<button class="chip'+(!day.sc?' selected':'')+'" data-code="">Sin turno</button>';cr.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',()=>{cr.querySelectorAll('.chip').forEach(x=>x.classList.remove('selected'));c.classList.add('selected');day.sc=c.dataset.code||null;const isE=day.dt!=='normal',ed=isE||day.sc==='P'||day.sc==='RE';if(isE&&day.sc!=='P')pb=day.dtb?.length?day.dtb:[{start:'08:30',end:'17:00'}];else if(day.sc==='P')pb=day.bo?.length?day.bo:[{start:'08:30',end:'13:00'},{start:'17:00',end:'21:00'}];else if(day.sc==='RE')pb=day.bo?.length?day.bo:[{start:'08:30',end:'17:00'}];else if(day.sc)pb=JSON.parse(JSON.stringify(state.shiftTypes[day.sc].blocks));else pb=[];rb(ed)}));const tr=$('dayTypeToggle');tr.querySelectorAll('button').forEach(b=>{b.classList.toggle('active',b.dataset.type===(day.dt||'normal'));b.onclick=()=>{tr.querySelectorAll('button').forEach(x=>x.classList.remove('active'));b.classList.add('active');day.dt=b.dataset.type;const isE=day.dt!=='normal';if(isE&&day.sc!=='P')pb=day.dtb?.length?day.dtb:[{start:'08:30',end:'17:00'}];else if(day.sc==='P')pb=day.bo?.length?day.bo:[{start:'08:30',end:'13:00'},{start:'17:00',end:'21:00'}];else if(!isE&&day.sc)pb=JSON.parse(JSON.stringify(state.shiftTypes[day.sc]?.blocks||[]));rb(isE||day.sc==='P'||day.sc==='RE')}});rb(day.dt!=='normal'||day.sc==='P'||day.sc==='RE');$('btnDeleteDay').onclick=()=>{if(!confirm('¿Eliminar este día?'))return;delete state.days[k];saveState();cs();cal()};$('btnSaveDay').onclick=()=>{day.notes=$('sheetNotes').value.trim();const isE=day.dt!=='normal';if(isE&&day.sc!=='P')day.dtb=pb;else if(day.sc==='P'||day.sc==='RE')day.bo=pb;if(!day.sc&&day.dt==='normal'&&!day.notes)delete state.days[adk];else state.days[adk]=day;saveState();cs();cal();sa()};$('sheetBackdrop').classList.add('open');$('daySheet').classList.add('open')}
-function rb(ed){const w=$('blocksEditor');w.innerHTML='';if(!ed){w.innerHTML='<p class="sheet-sub" style="margin-top:-6px">Horario del catálogo.</p>';return};pb.forEach((b,i)=>{const r=document.createElement('div');r.className='time-row';r.innerHTML=`<div style="flex:1"><span class="field-label">Inicio ${i+1}</span><input type="time" value="${esc(b.start)}" data-i="${i}" data-k="start"></div><div style="flex:1"><span class="field-label">Fin ${i+1}</span><input type="time" value="${esc(b.end)}" data-i="${i}" data-k="end"></div>`;w.appendChild(r)});w.querySelectorAll('input').forEach(inp=>inp.addEventListener('change',e=>{const i=Number(e.target.dataset.i),k=e.target.dataset.k;pb[i][k]=e.target.value;if(k==='end'&&pb[i].start&&tm(pb[i].end)<=tm(pb[i].start)){try{if(!confirm('¿El turno cruza medianoche?'))pb[i][k]=pb[i].start}catch{pb[i][k]=pb[i].start}}}))}
+function rb(ed){const w=$('blocksEditor');w.innerHTML='';if(!ed){w.innerHTML=`<p class="sheet-sub" style="margin-top:-6px">${day.sc?'Horario del catálogo.':'Selecciona un turno para editar horarios.'}</p>`;return};pb.forEach((b,i)=>{const r=document.createElement('div');r.className='time-row';r.innerHTML=`<div style="flex:1"><span class="field-label">Inicio ${i+1}</span><input type="time" value="${esc(b.start)}" data-i="${i}" data-k="start"></div><div style="flex:1"><span class="field-label">Fin ${i+1}</span><input type="time" value="${esc(b.end)}" data-i="${i}" data-k="end"></div>`;w.appendChild(r)});w.querySelectorAll('input').forEach(inp=>inp.addEventListener('change',e=>{const i=Number(e.target.dataset.i),k=e.target.dataset.k;pb[i][k]=e.target.value;if(k==='end'&&pb[i].start&&tm(pb[i].end)<=tm(pb[i].start)){try{if(!confirm('¿El turno cruza medianoche?'))pb[i][k]=pb[i].start}catch{pb[i][k]=pb[i].start}}}))}
 function cs(){$('sheetBackdrop').classList.remove('open');$('daySheet').classList.remove('open')}
 
 // --- CATALOG ---
@@ -312,7 +313,7 @@ function rc(){const e=$('catalogList');if(!e)return;e.innerHTML=Object.values(st
 function rs(){const pr=$('profileRow');if(!pr)return;pr.innerHTML=state.profiles.map(p=>`<label class="profile-chip${state.activeProfile===p?' active':''}"><input type="radio" name="profile" value="${esc(p)}"${state.activeProfile===p?' checked':''}>${esc(p)}</label>`).join('');pr.querySelectorAll('input[type=radio]').forEach(r=>r.addEventListener('change',e=>{state.activeProfile=e.target.value;saveState();rs();$('profilePill').textContent=state.activeProfile}));$('btnAddProfile').onclick=()=>{const i=$('newProfileName'),n=i.value.trim();if(!n)return;if(!state.profiles.includes(n))state.profiles.push(n);state.activeProfile=n;i.value='';saveState();rs()};const pb=$('permBanner');if('Notification'in window&&Notification.permission!=='granted'){pb.style.display='flex';pb.querySelector('button').onclick=async()=>{if((await Notification.requestPermission())==='granted'){state.settings.notificationsEnabled=true;saveState();rs();sa()}}}else pb.style.display='none';const ns=$('notifSwitch');ns.classList.toggle('on',state.settings.notificationsEnabled);ns.onclick=()=>{if(Notification.permission!=='granted'){alert('Concede permiso arriba.');return};state.settings.notificationsEnabled=!state.settings.notificationsEnabled;saveState();rs();sa()};const ms=$('minutesBefore');ms.value=state.settings.alarmMinutesBefore;ms.onchange=e=>{state.settings.alarmMinutesBefore=Number(e.target.value);saveState();sa()};if(user)$('userEmailDisplay').textContent=user.email}
 
 // --- ALARMAS ---
-function sa(){const nw=Date.now();st.forEach(t=>clearTimeout(t));st=[];if(!state.settings.notificationsEnabled||Notification.permission!=='granted')return;for(let o=0;o<=1;o++){const d=new Date(nw+o*86400000),k=key(d.getFullYear(),d.getMonth(),d.getDate());gb(gd(k)).forEach(b=>{const[h,m]=b.start.split(':').map(Number),at=new Date(d.getFullYear(),d.getMonth(),d.getDate(),h,m).getTime()-state.settings.alarmMinutesBefore*60000,delay=at-nw;if(delay>0&&delay<172800000)st.push(setTimeout(()=>{navigator.serviceWorker?.ready.then(r=>r.active?.postMessage({type:'SHOW_NOTIFICATION',payload:{title:`Turno en ${state.settings.alarmMinutesBefore} min`,body:`${state.shiftTypes[gd(k).sc]?.label||''} · entra a las ${b.start}`,tag:'turno'}}))},delay))})}}
+function sa(){const nw=Date.now();st.forEach(t=>clearTimeout(t));st=[];if(!state.settings.notificationsEnabled||Notification.permission!=='granted')return;for(let o=0;o<=1;o++){const d=new Date(nw+o*86400000),k=key(d.getFullYear(),d.getMonth(),d.getDate());gb(gd(k)).forEach(b=>{const[h,m]=b.start.split(':').map(Number),at=new Date(d.getFullYear(),d.getMonth(),d.getDate(),h,m).getTime()-state.settings.alarmMinutesBefore*60000,delay=at-nw;if(delay>0&&delay<172800000)st.push(setTimeout(()=>{navigator.serviceWorker?.ready.then(r=>r.active?.postMessage({type:'SHOW_NOTIFICATION',payload:{title:`Turno en ${state.settings.alarmMinutesBefore} min`,body:`${state.shiftTypes[gd(k).sc]?.label||'Turno'} · entra a las ${b.start}`,tag:`turno-${k}-${b.start}`}}))},delay))})}}
 
 const closeSheet = cs
 let syncing=false
@@ -329,8 +330,8 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('daySheet').class
 
 // --- NAV ---
 document.querySelectorAll('.bottom-nav button').forEach(b=>b.addEventListener('click',()=>sv(b.dataset.view)))
-document.getElementById('prevMonth').onclick=()=>{cm--;if(cm<0){cm=11;cy--}cal()}
-document.getElementById('nextMonth').onclick=()=>{cm++;if(cm>11){cm=0;cy++}cal()}
+document.getElementById('prevMonth').onclick=()=>{if($('daySheet').classList.contains('open'))return;cm--;if(cm<0){cm=11;cy--}cal()}
+document.getElementById('nextMonth').onclick=()=>{if($('daySheet').classList.contains('open'))return;cm++;if(cm>11){cm=0;cy++}cal()}
 document.getElementById('sheetBackdrop').addEventListener('click',cs)
 document.getElementById('btnCancelDay').addEventListener('click',cs)
 document.getElementById('themeToggle').onclick=()=>{theme=theme==='dark'?'light':'dark';applyTheme(theme);ut()}
@@ -350,8 +351,8 @@ if ('serviceWorker' in navigator) {
 }
 
 // --- BOOT ---
-window.addEventListener('online',()=>{showToast('✓ Conexión restaurada');if(user){syncDown();syncUp()}})
-window.addEventListener('offline',()=>showToast('✗ Sin conexión (modo offline)'))
+window.addEventListener('online',()=>{showToast('✓ Conexión restaurada');if($('localModeMsg'))$('localModeMsg').style.display='none';if(user){syncDown();syncUp()}})
+window.addEventListener('offline',()=>{showToast('✗ Sin conexión (modo offline)');if($('localModeMsg'))$('localModeMsg').style.display='block'})
 applyTheme(theme); ut()
 if($('localModeMsg'))$('localModeMsg').style.display=navigator.onLine?'none':'block'
 if (user) {
