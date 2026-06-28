@@ -23,7 +23,7 @@ try {
 
 // --- PERSISTENCIA LOCAL ---
 const S = { M:{code:'M',label:'Mañana',hex:'#F2A33C',blocks:[{start:'08:30',end:'17:00'}]}, T:{code:'T',label:'Tarde',hex:'#5B8DEF',blocks:[{start:'16:15',end:'00:45'}]}, INT:{code:'INT',label:'Intermedio',hex:'#2DD4BF',blocks:[{start:'13:30',end:'22:00'}]}, P:{code:'P',label:'Partido',hex:'#C77DFF',blocks:[]}, V:{code:'V',label:'Vacaciones',hex:'#7C9885',blocks:[]}, B:{code:'B',label:'Baja',hex:'#EF5B5B',blocks:[]}, RE:{code:'RE',label:'Resto/Otro',hex:'#A0A0A0',blocks:[]} }
-function defaultState() { return { activeProfile:'',profiles:[],shiftTypes:JSON.parse(JSON.stringify(S)),days:{},settings:{notificationsEnabled:false,alarmMinutesBefore:30} } }
+function defaultState() { return { activeProfile:'',profiles:[],shiftTypes:JSON.parse(JSON.stringify(S)),days:{},settings:{notificationsEnabled:false,alarmMinutesBefore:30},onboardingDone:false } }
 function loadState() {
   try {
     const r=localStorage.getItem(DB_KEY);if(!r)return defaultState()
@@ -107,7 +107,9 @@ async function syncDown() {
       const remoteTime = new Date(d[0].updated_at||0).getTime()
       const localTime = (state._savedAt||0)
       if (remoteTime > localTime) {
+        const rd = remote.onboardingDone||localStorage.getItem(ONBOARDING_KEY)
         state = {...defaultState(), ...remote, shiftTypes: {...S, ...remote.shiftTypes}}
+        if (rd) { state.onboardingDone = true; localStorage.setItem(ONBOARDING_KEY,'1') }
         saveState()
       }
     }
@@ -202,9 +204,11 @@ async function logout() { clearInterval(_int1);clearInterval(_int2); saveAuth(nu
 async function afterLogin() {
   const localDone = localStorage.getItem(ONBOARDING_KEY)
   if (localDone) { enterApp(); return }
-  // Check Supabase for onboarding status
+  // Check state fallback (survives sync across devices)
+  if (state.onboardingDone) { localStorage.setItem(ONBOARDING_KEY,'1'); enterApp(); return }
+  // Check Supabase profiles
   const remoteDone = await fetchProfileOnboarding()
-  if (remoteDone) { localStorage.setItem(ONBOARDING_KEY,'1'); enterApp(); return }
+  if (remoteDone) { localStorage.setItem(ONBOARDING_KEY,'1'); state.onboardingDone=true; saveState(); enterApp(); return }
   show('s-onboarding'); goOnboarding(0)
 }
 
@@ -243,7 +247,7 @@ $('onboardingNext').addEventListener('click',()=>{
     oMembers.forEach(m=>{if(!state.profiles.includes(m))state.profiles.push(m)})
     state.settings.notificationsEnabled=$('onboardingNotifSwitch').classList.contains('on')
     state.settings.alarmMinutesBefore=Number($('onboardingMinutes').value)
-    saveState(); localStorage.setItem(ONBOARDING_KEY,'1'); setProfileOnboardingDone(); enterApp()
+    state.onboardingDone=true; saveState(); localStorage.setItem(ONBOARDING_KEY,'1'); setProfileOnboardingDone(); enterApp()
   }
 })
 $('onboardingPrev').addEventListener('click',()=>{if(oStep>0)goOnboarding(oStep-1)})
@@ -351,7 +355,7 @@ window.addEventListener('offline',()=>showToast('✗ Sin conexión (modo offline
 applyTheme(theme); ut()
 if($('localModeMsg'))$('localModeMsg').style.display=navigator.onLine?'none':'block'
 if (user) {
-  if (localStorage.getItem(ONBOARDING_KEY)) { enterApp(); syncDown() }
+  if (localStorage.getItem(ONBOARDING_KEY)||state.onboardingDone) { enterApp(); syncDown() }
   else { afterLogin() }
 } else {
   show('s-auth')
