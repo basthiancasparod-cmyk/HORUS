@@ -51,6 +51,11 @@ async function supabaseFetch(path, body) {
   const headers = { 'apikey': SUPABASE_ANON_KEY, 'Content-Type': 'application/json' }
   if (user) headers['Authorization'] = `Bearer ${user.access_token}`
   const r = await fetch(SUPABASE_URL + path, { method: 'POST', headers, body: JSON.stringify(body) })
+  if (!r.ok) {
+    const errorData = await r.json().catch(() => ({}));
+    console.error(`Supabase error [${r.status}]:`, errorData);
+    throw new Error(errorData.error_description || errorData.message || `Error en servidor (${r.status})`);
+  }
   return r
 }
 
@@ -99,8 +104,13 @@ async function syncDown() {
   try {
     const r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data?select=data,updated_at&user_id=eq.${user.id}`, {})
     if (r.status === 401) { logout(); return }
-    if (r.status === 400) { try { const e=await r.json(); console.warn('Sync 400:',e); return } catch { return } }
-    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    
+    if (!r.ok) {
+        const errText = await r.text();
+        console.error(`Sync down failed [${r.status}]:`, errText);
+        throw new Error(`Error al sincronizar datos (${r.status})`);
+    }
+    
     const d = await r.json()
     if (d.length && d[0].data) {
       const remote = d[0].data
@@ -153,13 +163,23 @@ async function syncUp() {
     const h = { 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' }
     let r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data?user_id=eq.${user.id}`, { method: 'PATCH', headers: h, body })
     if (r.status === 401) { logout(); return }
-    if (r.status === 400) { try { const e=await r.json(); console.warn('SyncUp 400:',e); return } catch { return } }
+    
+    if (!r.ok && r.status !== 400) {
+        const errText = await r.text();
+        console.error(`Sync up failed [${r.status}]:`, errText);
+        throw new Error(`Error al guardar en la nube (${r.status})`);
+    }
+    
     const txt = await r.text()
     if (txt === '[]' || r.status === 404) {
       r = await authFetch(`${SUPABASE_URL}/rest/v1/user_data`, {
         method: 'POST', headers: h, body: JSON.stringify({ user_id: user.id, data: state, updated_at: new Date().toISOString() })
       })
-      if (!r.ok && r.status!==400) { try { const e=await r.json(); throw new Error(e.message||'Error al crear') } catch(e2) { if(!(e2 instanceof SyntaxError))throw e2 } }
+      if (!r.ok && r.status!==400) {
+        const errText = await r.text();
+        console.error(`Sync up create failed [${r.status}]:`, errText);
+        throw new Error(`Error al crear registro en la nube (${r.status})`);
+      }
     }
   } catch(e) { console.error('Sync up error:', e); showToast('✗ Error al guardar en la nube') }
 }

@@ -17,7 +17,19 @@ self.addEventListener('activate', (e) => {
 
 self.addEventListener('fetch', (e) => {
   e.respondWith(
-    caches.match(e.request).then((cached) => cached || fetch(e.request))
+    caches.match(e.request).then((cached) => {
+      // Return cached version if found, otherwise fetch from network
+      return cached || fetch(e.request).then(response => {
+        // Optional: cache successful network responses for future use
+        if (response && response.status === 200 && response.type === 'basic') {
+          const responseToCache = response.clone();
+          caches.open(CACHE).then(cache => {
+            cache.put(e.request, responseToCache);
+          });
+        }
+        return response;
+      });
+    })
   );
 });
 

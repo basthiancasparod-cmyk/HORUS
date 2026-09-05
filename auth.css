@@ -26,7 +26,7 @@
 }
 
 .auth-logo h1 {
-  font-size: 32px;
+  font-size: 2rem;
   font-weight: 800;
   background: linear-gradient(135deg, var(--accent) 0%, #C77DFF 100%);
   -webkit-background-clip: text;
@@ -36,28 +36,28 @@
 
 .auth-tagline {
   color: var(--text-dim);
-  font-size: 14px;
+  font-size: 0.875rem;
   margin: 6px 0 0;
 }
 
 .auth-tabs {
   display: flex;
   background: var(--panel);
-  border-radius: 12px;
-  padding: 4px;
-  margin-bottom: 20px;
+  border-radius: 0.75rem;
+  padding: 0.25rem;
+  margin-bottom: 1.25rem;
   border: 1px solid var(--border);
 }
 
 .auth-tab {
   flex: 1;
-  padding: 10px;
+  padding: 0.625rem;
   border: none;
   background: none;
   color: var(--text-dim);
-  font-size: 13px;
+  font-size: 0.8125rem;
   font-weight: 600;
-  border-radius: 9px;
+  border-radius: 0.5625rem;
   cursor: pointer;
   transition: all 0.2s;
   font-family: 'Inter', sans-serif;
@@ -73,25 +73,25 @@
 }
 
 #authForm .field {
-  margin-bottom: 14px;
+  margin-bottom: 0.875rem;
 }
 
 #authForm .field label {
   display: block;
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--text-dim);
-  margin-bottom: 5px;
+  margin-bottom: 0.3125rem;
   font-weight: 500;
 }
 
 #authForm .field input {
   width: 100%;
-  padding: 12px 14px;
+  padding: 0.75rem 0.875rem;
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 10px;
-  font-size: 14px;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
   font-family: 'Inter', sans-serif;
   transition: border 0.2s;
 }
@@ -102,8 +102,8 @@
 }
 
 .auth-error {
-  font-size: 13px;
+  font-size: 0.8125rem;
   color: var(--c-B);
-  margin: 8px 0;
-  min-height: 20px;
+  margin: 0.5rem 0;
+  min-height: 1.25rem;
 }
