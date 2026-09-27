@@ -15,7 +15,7 @@
  *     si fueran actuales sería peor que no responder.
  */
 
-const VERSION = 'v4.8.0';
+const VERSION = 'v4.9.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 

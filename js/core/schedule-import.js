@@ -718,6 +718,14 @@ export async function parseSchedulePdf(bytes) {
       lastDay: valores[valores.length - 1],
       fontMetrics: tablaAnchos.size > 0,
       header: cabeceraMes ? `${MONTHS[cabeceraMes.month - 1]} ${cabeceraMes.year}` : null,
+      /**
+       * Evidencia del ENCUADRE: la secuencia de números que el lector ha
+       * encontrado impresa en la hoja, en orden, y las letras de la cabecera. La
+       * pantalla de revisión la enseña para que se pueda comparar de un vistazo
+       * con el papel: si esta tira no es la de la hoja, el encuadre está mal.
+       */
+      printedDays: [...valores],
+      headerLetters: [...letras],
     },
   };
 }

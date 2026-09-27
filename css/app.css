@@ -1553,6 +1553,39 @@ table.review .col-name .member-name { font-size: var(--fs-sm); font-weight: 600;
 /* El enlace «Conseguir una clave» se ve como un botón, no como un enlace azul */
 a.btn { text-decoration: none; }
 
+/* Prueba del encuadre: la tira de números leída de la hoja */
+.framing {
+  padding: var(--sp-3);
+  margin-bottom: var(--sp-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.framing-title {
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.framing-days {
+  margin-top: 2px;
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
+.framing-letters {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  letter-spacing: 0.12em;
+}
+
 /* Columnas que caen fuera del mes del cuadrante (finales del anterior o
    principios del siguiente): se ven distinta para que no pasen por días del mes. */
 .review th.is-outside {

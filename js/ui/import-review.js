@@ -364,31 +364,98 @@ async function contrastarPdfConIA(bytes, parse, config) {
     // Las dos lecturas pueden escribir el nombre distinto («YORBELI» / «YORBELI
     // C.»), así que se emparejan por el principio del nombre.
     const clave = (s) => fold(String(s || '')).replace(/\s+/g, ' ').slice(0, 6);
-    const leidoPorIA = new Map();
-    for (const p of ia.people) {
-      for (const e of p.entries) leidoPorIA.set(`${clave(p.label)}|${e.date}`, e.code);
+
+    /** date → código, por persona. */
+    const mapaDe = (resultado) => {
+      const porPersona = new Map();
+      for (const p of resultado.people) {
+        const m = new Map();
+        for (const e of p.entries) m.set(e.date, e.code);
+        porPersona.set(clave(p.label), m);
+      }
+      return porPersona;
+    };
+
+    const nuestro = mapaDe(parse);
+    const suyo = mapaDe(ia);
+
+    /* LA IA SE DESPLAZA DE FORMA SISTEMÁTICA.
+       Medido con el cuadrante real: la IA lee la rejilla corrida unos días (deduce
+       la columna del número en vez de leer la cabecera). Marcar cada casilla como
+       dudosa por eso es inútil: llenaba la revisión de ámbar sin señalar nada
+       concreto. Así que primero se busca un desplazamiento uniforme y, si lo hay,
+       se avisa UNA vez y no se toca ninguna casilla. Solo lo que no se explica por
+       ese desplazamiento se marca, que es donde de verdad hay que mirar. */
+    const compararCon = (desplazamiento) => {
+      let iguales = 0;
+      let distintos = 0;
+      for (const [nombre, mio] of nuestro) {
+        const otro = suyo.get(nombre);
+        if (!otro) continue;
+        for (const [fecha, codigo] of mio) {
+          const fechaIA = desplazarFecha(fecha, desplazamiento);
+          const suCodigo = otro.get(fechaIA);
+          if (suCodigo === undefined) continue;
+          if (suCodigo === codigo) iguales++;
+          else distintos++;
+        }
+      }
+      return { iguales, distintos, total: iguales + distintos };
+    };
+
+    let mejor = { desplazamiento: 0, ...compararCon(0) };
+    for (let k = -4; k <= 4; k++) {
+      if (k === 0) continue;
+      const prueba = { desplazamiento: k, ...compararCon(k) };
+      if (prueba.iguales > mejor.iguales) mejor = prueba;
+    }
+
+    const desplazado = mejor.desplazamiento !== 0
+      && mejor.total > 0
+      && mejor.iguales / mejor.total >= 0.6;
+
+    parse.issues = parse.issues || [];
+
+    if (desplazado) {
+      parse.issues.push({
+        kind: 'ai-cross-check',
+        count: 0,
+        message: `Segunda lectura con IA: la IA lee la rejilla desplazada ${Math.abs(mejor.desplazamiento)} día(s) `
+          + `(${mejor.iguales} de ${mejor.total} casillas coinciden si se corrige ese desplazamiento). `
+          + 'Es un error conocido suyo, así que mandan las fechas del lector del dispositivo. '
+          + 'No se ha marcado ninguna casilla por esto.',
+      });
+      return `La IA lee el cuadrante desplazado ${Math.abs(mejor.desplazamiento)} día(s): se usa el lector del `
+        + 'dispositivo, que es el que cuadra con los números impresos en la hoja.';
     }
 
     let distintos = 0;
     let comprobadas = 0;
-    for (const p of parse.people) {
-      for (const e of p.entries) {
-        const otro = leidoPorIA.get(`${clave(p.label)}|${e.date}`);
-        if (otro === undefined) continue;
+    for (const [nombre, mio] of nuestro) {
+      const otro = suyo.get(nombre);
+      if (!otro) continue;
+      for (const [fecha, codigo] of mio) {
+        const suCodigo = otro.get(fecha);
+        if (suCodigo === undefined) continue;
         comprobadas++;
-        if (otro !== e.code) {
-          distintos++;
-          e.confidence = 'low';
-          e.reason = `${e.reason ? `${e.reason}; ` : ''}la IA leyó «${otro}» en esa casilla`;
+        if (suCodigo === codigo) continue;
+        distintos++;
+        const persona = parse.people.find((p) => clave(p.label) === nombre);
+        const entrada = persona?.entries.find((e) => e.date === fecha);
+        if (entrada) {
+          entrada.confidence = 'low';
+          entrada.reason = `${entrada.reason ? `${entrada.reason}; ` : ''}la IA leyó «${suCodigo}» en esa casilla`;
         }
-        leidoPorIA.delete(`${clave(p.label)}|${e.date}`);
       }
     }
 
     // Lo que solo vio la IA: no se inventa nada, se avisa y se deja que decida.
-    const soloIA = leidoPorIA.size;
+    let soloIA = 0;
+    for (const [nombre, otro] of suyo) {
+      const mio = nuestro.get(nombre);
+      for (const [fecha] of otro) if (!mio?.has(fecha)) soloIA++;
+    }
 
-    parse.issues = parse.issues || [];
     parse.issues.push({
       kind: 'ai-cross-check',
       count: distintos,
@@ -413,6 +480,14 @@ async function contrastarPdfConIA(bytes, parse, config) {
     console.error('[import] el contraste con la IA falló:', err);
     return null;
   }
+}
+
+/** Suma (o resta) días a una clave "YYYY-MM-DD". */
+function desplazarFecha(fecha, dias) {
+  const dt = fromKey(fecha);
+  if (!dt) return fecha;
+  dt.setDate(dt.getDate() + dias);
+  return dateKey(dt.getFullYear(), dt.getMonth(), dt.getDate());
 }
 
 async function loadPdf(file) {
@@ -821,6 +896,7 @@ function renderReview() {
   // --- La rejilla ---
   body.appendChild(el('div', { class: 'section-label', style: { marginBottom: 'var(--sp-2)' } },
     'Lo que se va a importar'));
+  body.appendChild(encuadre());
   body.appendChild(renderGrid(monthKey));
 
   // --- Leyenda ---
@@ -1106,6 +1182,38 @@ function fechasDeLaRevision(monthKey) {
     ...despues.map((date) => ({ date, outside: true })),
   ];
   return lista;
+}
+
+/**
+ * Prueba del ENCUADRE, a la vista.
+ *
+ * Enseña la tira de números que el lector ha encontrado IMPRESA en la hoja, en
+ * orden, y las letras de la cabecera. Es la comprobación más directa que puede
+ * hacer el usuario: si esa tira no es la que tiene el papel delante, el encuadre
+ * está mal y se ve al instante, sin tener que interpretar la rejilla.
+ */
+function encuadre() {
+  const meta = parseResult.meta || {};
+  const numeros = meta.printedDays || [];
+  const letras = meta.headerLetters || [];
+  if (!numeros.length) return el('div');
+
+  const tira = numeros.length > 14
+    ? `${numeros.slice(0, 7).join(' · ')} … ${numeros.slice(-4).join(' · ')}`
+    : numeros.join(' · ');
+
+  return el('div', { class: 'framing' }, [
+    el('div', { class: 'framing-title' }, 'Encuadre leído en la hoja'),
+    el('div', { class: 'framing-days' }, tira),
+    letras.length
+      ? el('div', { class: 'framing-letters' },
+        `Cabecera: ${letras.slice(0, 7).join(' ')} (${letras.length} columnas)`)
+      : null,
+    el('div', { class: 'field-hint' },
+      `${numeros.length} número(s) impresos · ${meta.columns || '?'} columnas · `
+      + `el mes empieza en el ${meta.firstDay ?? '?'} y la tira acaba en ${meta.lastDay ?? '?'}. `
+      + 'Compara esta tira con el papel: son los números que se han leído de la hoja.'),
+  ]);
 }
 
 function renderGrid(monthKey) {
