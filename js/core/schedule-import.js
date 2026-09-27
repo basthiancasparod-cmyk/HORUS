@@ -582,11 +582,14 @@ export async function parseSchedulePdf(bytes) {
       }
       if (confianza === 'low') celdasDudosas++;
 
-      // Fuera del mes: no es una entrada, solo se cuenta.
-      if (!fecha || fecha.slice(0, 7) !== monthKey) {
-        fueraDeMes++;
-        continue;
-      }
+      // Fuera del mes del cuadrante: se CUENTA, pero NO se descarta.
+      // Un cuadrante de octubre empieza a menudo con los últimos días de
+      // septiembre y acaba con los primeros de noviembre, y esas casillas son
+      // días de trabajo reales: van a su fecha de verdad, no se tiran ni se
+      // mudan de mes.
+      if (!fecha) continue;
+      const fuera = fecha.slice(0, 7) !== monthKey;
+      if (fuera) fueraDeMes++;
 
       const dt = fromKey(fecha);
       entradas.push({
@@ -594,6 +597,7 @@ export async function parseSchedulePdf(bytes) {
         day: dt ? dt.getDate() : Number(fecha.slice(8, 10)),
         code: codigo,
         confidence: confianza,
+        ...(fuera ? { outsideMonth: true } : {}),
         ...(motivos.length ? { reason: motivos.join('; ') } : {}),
       });
     }
@@ -646,8 +650,8 @@ export async function parseSchedulePdf(bytes) {
     issues.push({
       kind: 'outside-month',
       count: fueraDeMes,
-      message: `${fueraDeMes} casillas caen fuera de ${monthKey} (finales del mes anterior o principios del siguiente): `
-        + 'no se importan.',
+      message: `${fueraDeMes} casillas son de los meses vecinos (finales del anterior o principios del siguiente). `
+        + 'Se importan a su fecha de verdad, y en la revisión salen marcadas como de otro mes.',
     });
   }
   if (mejor.fallosDia) {
@@ -789,7 +793,12 @@ export function buildEntriesFromParse(parseResult, options = {}) {
   } = options || {};
 
   const catalogo = new Map(defaultShiftTypes().map((t) => [String(t.code).toUpperCase(), t]));
-  const mesBase = mesDeOverride(monthOverrides, null) || parseResult.monthKey || null;
+  // OJO: el mes detectado NO se usa para recolocar fechas. Las del lector ya son
+  // las de verdad, incluidos los últimos días del mes anterior y los primeros del
+  // siguiente, que el cuadrante también cubre. Solo se recoloca si el usuario ha
+  // forzado un mes a mano (`monthOverrides`), que es un caso distinto: rehacer
+  // una hoja entera como si fuera de otro mes.
+  const mesBase = mesDeOverride(monthOverrides, null) || null;
 
   for (const persona of parseResult.people) {
     if (!persona || !Array.isArray(persona.entries)) continue;
@@ -887,10 +896,11 @@ export function commitImportedEntries(store, entries, { year, month, identities 
     store.batch('importar cuadrante del PDF', () => {
       for (const e of entries) {
         if (!e || !e.memberLabel || !e.date || !e.typeCode) { resumen.skipped++; continue; }
-        if (mesObjetivo && !String(e.date).startsWith(mesObjetivo)) {
-          resumen.skipped++;
-          continue;
-        }
+        /* NO se filtra por el mes del cuadrante: las casillas de los últimos días
+           del mes anterior y de los primeros del siguiente también se importan, a
+           su fecha real. Filtrarlas aquí era lo que hacía que se perdieran los
+           días de septiembre y el primero de noviembre. */
+        if (!fromKey(e.date)) { resumen.skipped++; continue; }
         const tipo = porCodigo.get(String(e.typeCode).toUpperCase());
         if (!tipo) {
           resumen.skipped++;

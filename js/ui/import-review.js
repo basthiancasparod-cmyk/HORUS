@@ -333,15 +333,98 @@ async function loadFile(file) {
   notify.error('Solo se pueden importar PDF, fotos o capturas de pantalla. Para hojas de cálculo usa la importación de CSV.');
 }
 
+/**
+ * Segunda lectura del PDF con IA, para contrastar con el lector del dispositivo.
+ *
+ * NO sustituye al lector: éste es exacto con los PDF que traen texto, y la IA se
+ * equivoca (medido: inventa la letra del día de la semana y rellena casillas
+ * vacías). Lo que aporta es una opinión independiente: si los dos coinciden, hay
+ * mucha más seguridad; y donde no coincidan, la casilla se marca en ámbar con lo
+ * que leyó la IA, para que lo mire el usuario.
+ *
+ * Devuelve un aviso para enseñar, o `null` si no se pudo contrastar.
+ */
+async function contrastarPdfConIA(bytes, parse, config) {
+  try {
+    const mod = await import('../core/ai-vision.js');
+    if (typeof mod.readScheduleWithAI !== 'function') return null;
+
+    const data = await blobToBase64(new Blob([bytes], { type: 'application/pdf' }));
+    const ia = await mod.readScheduleWithAI({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      model: config.model,
+      file: { data, mimeType: 'application/pdf', name: 'cuadrante.pdf' },
+    });
+
+    if (!ia?.ok) {
+      return `La IA no ha podido leer este PDF (${ia?.reason || 'sin motivo'}), así que se usa solo el lector del dispositivo.`;
+    }
+
+    // Las dos lecturas pueden escribir el nombre distinto («YORBELI» / «YORBELI
+    // C.»), así que se emparejan por el principio del nombre.
+    const clave = (s) => fold(String(s || '')).replace(/\s+/g, ' ').slice(0, 6);
+    const leidoPorIA = new Map();
+    for (const p of ia.people) {
+      for (const e of p.entries) leidoPorIA.set(`${clave(p.label)}|${e.date}`, e.code);
+    }
+
+    let distintos = 0;
+    let comprobadas = 0;
+    for (const p of parse.people) {
+      for (const e of p.entries) {
+        const otro = leidoPorIA.get(`${clave(p.label)}|${e.date}`);
+        if (otro === undefined) continue;
+        comprobadas++;
+        if (otro !== e.code) {
+          distintos++;
+          e.confidence = 'low';
+          e.reason = `${e.reason ? `${e.reason}; ` : ''}la IA leyó «${otro}» en esa casilla`;
+        }
+        leidoPorIA.delete(`${clave(p.label)}|${e.date}`);
+      }
+    }
+
+    // Lo que solo vio la IA: no se inventa nada, se avisa y se deja que decida.
+    const soloIA = leidoPorIA.size;
+
+    parse.issues = parse.issues || [];
+    parse.issues.push({
+      kind: 'ai-cross-check',
+      count: distintos,
+      message: `Segunda lectura con IA: ${comprobadas} casilla(s) contrastadas, ${distintos} en desacuerdo`
+        + (soloIA ? ` y ${soloIA} que solo vio la IA` : '')
+        + '. Las que no coinciden van marcadas para que las revises.',
+    });
+
+    // Los recuentos cambian al marcar casillas, así que se rehacen.
+    let high = 0;
+    let low = 0;
+    for (const p of parse.people) {
+      for (const e of p.entries) (e.confidence === 'high' ? high++ : low++);
+    }
+    parse.stats.high = high;
+    parse.stats.low = low;
+
+    return distintos
+      ? `Contrastado con la IA: ${distintos} casilla(s) no coinciden y van marcadas en ámbar.`
+      : `Contrastado con la IA: las ${comprobadas} casillas coinciden con el lector.`;
+  } catch (err) {
+    console.error('[import] el contraste con la IA falló:', err);
+    return null;
+  }
+}
+
 async function loadPdf(file) {
   setSubtitle(file.name);
   const stop = showBusy('Leyendo el cuadrante…', 'Se interpreta en tu dispositivo. Con cuadrantes grandes puede tardar unos segundos.');
 
+  let bytes = null;
   let parse;
   try {
     const mod = await import('../core/schedule-import.js');
     importMeta.KNOWN_CODES = mod.KNOWN_CODES || {};
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    bytes = new Uint8Array(await file.arrayBuffer());
     parse = await mod.parseSchedulePdf(bytes);
   } catch (err) {
     console.error('[import] fallo al leer el PDF:', err);
@@ -355,6 +438,17 @@ async function loadPdf(file) {
     parseResult = parse;
     fromAI = false;
     aiWarnings = [];
+
+    // Con clave de IA, se lee también con IA y se contrasta. Sin clave, solo el
+    // lector del dispositivo: la app funciona igual, sin depender de nadie.
+    if (aiReady()) {
+      const config = aiConfig();
+      const aviso = await contrastarPdfConIA(bytes, parse, config);
+      renderReview();
+      if (aviso) notify.info(aviso, { duration: 9000 });
+      return;
+    }
+
     renderReview();
     return;
   }
@@ -774,7 +868,7 @@ function describeIssue(issue) {
   switch (issue.kind) {
     case 'unknown-code': return `El código «${issue.code}» aparece ${issue.count} ${issue.count === 1 ? 'vez' : 'veces'} y no está en el catálogo.`;
     case 'low-confidence': return `${issue.count} ${issue.count === 1 ? 'casilla' : 'casillas'} no se han podido situar con seguridad.`;
-    case 'outside-month': return `${issue.count} columnas quedan fuera del mes (días de los meses vecinos).`;
+    case 'outside-month': return `${issue.count} casillas son de los meses vecinos: se importan a su fecha real y salen marcadas en la rejilla.`;
     case 'ambiguous-cluster': return `No se pudo repartir un grupo de códigos con seguridad: ${issue.message}`;
     case 'column-mismatch': return `${issue.count} ${issue.count === 1 ? 'casilla' : 'casillas'} caen en una columna que no cuadra con el día de la semana real: revísalas.`;
     case 'duplicate-day': return `${issue.count} día(s) venían repetidos: se conserva el primero de cada uno.`;
@@ -980,24 +1074,65 @@ function renderMonthChooser(reason) {
  * Rejilla de revisión
  * ------------------------------------------------------------------ */
 
+/**
+ * Fechas que se van a importar, EN ORDEN: los últimos días del mes anterior, el
+ * mes entero y los primeros del siguiente.
+ *
+ * Importa verlas todas: el lector trae las casillas del borde con su fecha real
+ * (un cuadrante de octubre suele empezar a finales de septiembre), y la regla de
+ * esta pantalla es que nada se guarda sin que el usuario lo haya visto.
+ */
+function fechasDeLaRevision(monthKey) {
+  const totalDias = daysInMonth(monthKey);
+  const primero = `${monthKey}-01`;
+  const ultimo = `${monthKey}-${String(totalDias).padStart(2, '0')}`;
+
+  const bordes = new Set();
+  for (const persona of parseResult.people) {
+    for (const e of persona.entries) {
+      if (e.date.slice(0, 7) !== monthKey) bordes.add(e.date);
+    }
+  }
+
+  const antes = [...bordes].filter((d) => d < primero).sort();
+  const despues = [...bordes].filter((d) => d > ultimo).sort();
+
+  const lista = [
+    ...antes.map((date) => ({ date, outside: true })),
+    ...Array.from({ length: totalDias }, (_, i) => ({
+      date: `${monthKey}-${String(i + 1).padStart(2, '0')}`,
+      outside: false,
+    })),
+    ...despues.map((date) => ({ date, outside: true })),
+  ];
+  return lista;
+}
+
 function renderGrid(monthKey) {
-  const doc = liveCtx().doc;
-  const totalDays = daysInMonth(monthKey);
-  const [year, month] = monthKey.split('-').map(Number);
+  const columnas = fechasDeLaRevision(monthKey);
 
   const wrap = el('div', { class: 'review-wrap' });
   const table = el('table', { class: 'review' });
   const thead = el('thead');
   const headRow = el('tr', {}, [el('th', { class: 'col-name' }, 'Persona')]);
 
-  for (let day = 1; day <= totalDays; day++) {
-    const date = fromKey(dateKey(year, month - 1, day));
-    const dow = date.getDay();
+  for (const col of columnas) {
+    const fecha = fromKey(col.date);
+    const dow = fecha.getDay();
+    const dia = fecha.getDate();
     headRow.appendChild(el('th', {
-      class: (dow === 0 || dow === 6 ? 'is-weekend ' : '') + (dow === 0 ? 'is-sunday' : ''),
+      class: [
+        dow === 0 || dow === 6 ? 'is-weekend' : '',
+        dow === 0 ? 'is-sunday' : '',
+        col.outside ? 'is-outside' : '',
+      ].filter(Boolean).join(' '),
+      title: col.outside ? `${col.date} (fuera del mes del cuadrante)` : col.date,
     }, [
       el('span', { class: 'th-dow' }, DOW_SHORT[(dow + 6) % 7]),
-      el('span', { class: 'th-num' }, String(day)),
+      el('span', { class: 'th-num' }, String(dia)),
+      col.outside
+        ? el('span', { class: 'th-month' }, MONTHS[fecha.getMonth()].slice(0, 3))
+        : null,
     ]));
   }
   thead.appendChild(headRow);
@@ -1012,8 +1147,8 @@ function renderGrid(monthKey) {
       ]),
     ])]);
 
-    for (let day = 1; day <= totalDays; day++) {
-      row.appendChild(renderCell(person, monthKey, day));
+    for (const col of columnas) {
+      row.appendChild(renderCell(person, col.date));
     }
     tbody.appendChild(row);
   }
@@ -1033,9 +1168,8 @@ function cellKey(label, date) {
   return `${label}|${date}`;
 }
 
-function renderCell(person, monthKey, day) {
+function renderCell(person, date) {
   const doc = liveCtx().doc;
-  const date = `${monthKey}-${String(day).padStart(2, '0')}`;
   const key = cellKey(person.label, date);
 
   const detected = person.entries.find((e) => e.date === date);
@@ -1060,12 +1194,17 @@ function renderCell(person, monthKey, day) {
 
   const type = typeCode ? shiftTypeByCode(doc, typeCode) : null;
   const hex = type?.hex;
+  const dia = Number(date.slice(8, 10));
+  const fuera = date.slice(0, 7) !== (chosenMonth || parseResult.monthKey);
+  const etiquetaDia = fuera
+    ? `${dia} de ${MONTHS[Number(date.slice(5, 7)) - 1]}`
+    : `día ${dia}`;
 
   const button = el('button', {
     type: 'button',
     class: `review-cell ${state === 'high' ? '' : `is-${state}`}`.trim(),
-    title: buildCellTitle(person.label, day, detected, type, reason),
-    'aria-label': `${person.label}, día ${day}: ${type ? type.label : (detected ? `código ${detected.code}` : 'sin turno')}`,
+    title: `${person.label} · ${etiquetaDia}${fuera ? ' (fuera del mes del cuadrante)' : ''}`,
+    'aria-label': `${person.label}, ${etiquetaDia}: ${type ? type.label : (detected ? `código ${detected.code}` : 'sin turno')}`,
     onclick: () => editCell(person, date, typeCode),
   }, [
     el('span', {
@@ -1100,16 +1239,6 @@ async function ensureMeta() {
   } catch {
     importMeta.KNOWN_CODES = {};
   }
-}
-
-function buildCellTitle(label, day, detected, type, reason) {
-  const parts = [`${label} · día ${day}`];
-  if (type) parts.push(type.label);
-  else if (detected) parts.push(`código «${detected.code}» sin asignar`);
-  else parts.push('sin turno');
-  if (reason) parts.push(reason);
-  parts.push('— toca para cambiar');
-  return parts.join(' · ');
 }
 
 function readableOn(hex) {

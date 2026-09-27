@@ -57,6 +57,14 @@ son otras:
   dispositivo**: el archivo no se sube a ningún servidor.
 - Detecta el mes solo, y lo **comprueba** con los días de la semana: si el 16
   cae en viernes, cuadra. Si no cuadra, te pregunta en lugar de adivinar.
+- El cuadrante suele empezar con los últimos días del mes anterior y acabar con
+  los primeros del siguiente. Esas casillas **se importan a su fecha real** (por
+  ejemplo, el 29 y el 30 de septiembre y el 1 de noviembre), no se tiran ni se
+  cambian de mes, y en la revisión salen marcadas como de otro mes.
+- Si tienes configurada una clave de IA, el PDF **se lee dos veces**: con el
+  lector del dispositivo y con la IA. Donde las dos lecturas no coincidan, la
+  casilla va marcada en ámbar con lo que leyó la IA. Sin clave funciona igual,
+  solo con el lector local.
 - **Pantalla de revisión obligatoria**: nada se guarda sin que lo veas. Lo que
   el lector no tiene claro se marca en ámbar y los códigos que no reconoce se
   agrupan para que les digas qué turno son (y lo recuerda la próxima vez).

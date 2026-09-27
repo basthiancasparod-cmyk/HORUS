@@ -1553,6 +1553,20 @@ table.review .col-name .member-name { font-size: var(--fs-sm); font-weight: 600;
 /* El enlace «Conseguir una clave» se ve como un botón, no como un enlace azul */
 a.btn { text-decoration: none; }
 
+/* Columnas que caen fuera del mes del cuadrante (finales del anterior o
+   principios del siguiente): se ven distinta para que no pasen por días del mes. */
+.review th.is-outside {
+  background: color-mix(in srgb, var(--info) 12%, transparent);
+}
+
+.review th .th-month {
+  display: block;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  color: var(--info);
+  text-transform: lowercase;
+}
+
 /* ==========================================================================
    Vista HOY — cabecera, próximo turno y guardia
    ========================================================================== */

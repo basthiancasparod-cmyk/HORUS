@@ -121,14 +121,34 @@ await it('encuentra a las seis personas de la hoja', () => {
     `falta YORBELI (detectadas: ${labels.join(', ')})`);
 });
 
-await it('no genera ningún turno fuera del mes', () => {
+/**
+ * El cuadrante cubre también los últimos días del mes anterior y los primeros
+ * del siguiente. Esas casillas van a su FECHA REAL: no se tiran ni se mudan de
+ * mes. Este cuadrante tiene 28, 29 y 30 de septiembre delante y el 1 de noviembre
+ * detrás, y las tres cosas tienen que estar.
+ */
+await it('los días de los meses vecinos van a su fecha real', () => {
+  const fechas = new Set();
   for (const person of parse.people) {
-    for (const entry of person.entries) {
-      ok(entry.date.startsWith('2026-10'),
-        `${person.label} tiene una fecha fuera del mes: ${entry.date}`);
-    }
+    for (const entry of person.entries) fechas.add(entry.date);
   }
-  is(parse.stats.outsideMonth >= 0, true, 'se cuentan las columnas de fuera');
+
+  // 29 y 30 de septiembre sí traen turnos. Las otras tres columnas del borde
+  // (28 de septiembre, 31 de octubre y 1 de noviembre) están VACÍAS en esta hoja
+  // para las seis personas, así que no pueden aparecer como entrada.
+  for (const esperada of ['2026-09-29', '2026-09-30', '2026-10-01', '2026-10-30']) {
+    ok(fechas.has(esperada), `falta ${esperada} (el cuadrante la cubre)`);
+  }
+  notOk(fechas.has('2026-09-28'), 'el 28 de septiembre está vacío: no se inventa');
+
+  // Nada se sale del tramo que cubre la hoja: del 28 de septiembre al 1 de
+  // noviembre. Si apareciera algo anterior o posterior, el lector se habría
+  // inventado columnas.
+  for (const fecha of fechas) {
+    ok(fecha >= '2026-09-28' && fecha <= '2026-11-01', `fecha fuera del tramo de la hoja: ${fecha}`);
+  }
+
+  ok(parse.stats.outsideMonth > 0, 'y se siguen contando aparte para avisar en la revisión');
 });
 
 await it('la mayoría de las casillas se detectan con seguridad', () => {
@@ -321,9 +341,11 @@ await it('se importan los turnos y se crean las personas que faltan', () => {
       `debe existir ${needle} en el equipo`);
   }
 
-  // Todos los turnos importados caen en octubre de 2026
+  // Todo lo importado cae dentro del tramo que cubre la hoja, del 28 de
+  // septiembre al 1 de noviembre, y cada turno tiene su tipo.
   for (const entry of store.doc.entries) {
-    ok(entry.date.startsWith('2026-10'), `turno fuera del mes: ${entry.date}`);
+    ok(entry.date >= '2026-09-28' && entry.date <= '2026-11-01',
+      `turno fuera del tramo de la hoja: ${entry.date}`);
     ok(entry.typeId, 'todo turno importado tiene tipo');
   }
 });
