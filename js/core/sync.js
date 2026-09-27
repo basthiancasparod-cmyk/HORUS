@@ -582,13 +582,22 @@ export function createSyncEngine(deps) {
     const userId = currentSession()?.userId;
 
     for (const [key, desc] of Object.entries(descriptors)) {
-      // La marca de agua es `client_updated_at` (la marca del cliente que
-      // resuelve el conflicto), no `updated_at` del servidor: así el filtro
-      // tiene exactamente la misma granularidad que la comparación que decide
-      // quién gana, y ningún cambio puede colarse entre dos marcas.
-      const since = full ? null : state.lastPullAt[desc.table];
+      /* La marca de agua es `updated_at`, que la pone EL SERVIDOR al escribir.
+         Antes se usaba `client_updated_at`, que es el reloj del propio
+         dispositivo, y encima se saltaba a `Date.now()` cuando no venía nada.
+         Consecuencia: si el móvil va unos minutos por detrás de la PC, los
+         cambios del móvil nacen con una marca anterior a la que ya se trajo la
+         PC y la consulta los ignora PARA SIEMPRE. El síntoma era «todo estaba al
+         día» con cambios que nunca llegaban.
+         Se pide con `gte` y no con `gt` para no perder las filas que comparten
+         el instante de corte; comparar la huella de cada fila hace que volver a
+         aplicar una fila ya vista no cueste nada.
+         Una marca antigua (numérica) se descarta: obliga a un pull completo una
+         vez y a partir de ahí todo va con la hora del servidor. */
+      const marca = state.lastPullAt[desc.table];
+      const since = full || typeof marca !== 'string' ? null : marca;
       let query = `/rest/v1/${desc.table}?user_id=eq.${userId}&select=*&limit=${PULL_LIMIT}`;
-      if (since) query += `&client_updated_at=gt.${encodeURIComponent(since)}`;
+      if (since) query += `&updated_at=gte.${encodeURIComponent(since)}`;
       query += '&order=updated_at.asc';
 
       const response = await api(query);
@@ -610,12 +619,24 @@ export function createSyncEngine(deps) {
       const nextIds = new Set(knownIds);
       const nextHashes = { ...knownHashes };
       let newestStamp = 0;
+      // Instante del SERVIDOR más reciente de esta tanda: es el que se guarda
+      // como marca de agua. Nunca la hora local.
+      let newestServer = null;
+      let newestServerMs = 0;
 
       for (const row of rows) {
         const id = String(row[desc.pk] ?? row.id ?? row.day_date);
         if (!id) continue;
         const rowStamp = Number(row.client_updated_at) || 0;
         if (rowStamp > newestStamp) newestStamp = rowStamp;
+
+        if (row.updated_at) {
+          const ms = Date.parse(row.updated_at);
+          if (Number.isFinite(ms) && ms >= newestServerMs) {
+            newestServerMs = ms;
+            newestServer = String(row.updated_at);
+          }
+        }
 
         // Una lápida local pendiente manda: si yo borré esto, la fila que aún
         // vive en el servidor no debe resucitarla en mi dispositivo.
@@ -709,7 +730,11 @@ export function createSyncEngine(deps) {
       // La marca de agua usa el instante DEL SERVIDOR, no el del cliente. Si se
       // usara la hora local y el reloj del dispositivo fuera adelantado, los
       // cambios remotos con marca intermedia se perderían para siempre.
-      state.lastPullAt[desc.table] = newestStamp || Date.now();
+      // Solo se AVANZA la marca de agua si el servidor ha devuelto algo, y se
+      // avanza al instante del servidor. Saltarla a la hora local cuando la
+      // respuesta venía vacía era lo que dejaba a un dispositivo sordo para
+      // siempre: su reloj se adelantaba a los cambios del otro.
+      if (newestServer) state.lastPullAt[desc.table] = newestServer;
       saveSyncState(state);
     }
 

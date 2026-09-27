@@ -515,6 +515,13 @@ function createFakeSupabase() {
     // GET
     const userId = params.get('user_id')?.replace('eq.', '');
     let list = [...rows.values()].filter((r) => !userId || r.user_id === userId);
+    // Marca de agua del servidor (`updated_at`), que es la que usa el motor.
+    // Se admite `gte.` porque la consulta real pide el corte incluido.
+    const porServidor = params.get('updated_at');
+    if (porServidor?.startsWith('gte.')) {
+      const corte = decodeURIComponent(porServidor.slice(4));
+      list = list.filter((r) => String(r.updated_at) >= corte);
+    }
     const since = params.get('client_updated_at');
     if (since?.startsWith('gt.')) {
       const threshold = Number(since.slice(3)) || 0;
@@ -569,8 +576,14 @@ function createFakeSupabase() {
         ...row,
         ...changes,
         payload: { ...row.payload, ...payloadChanges },
-        client_updated_at: Math.max(Number(row.client_updated_at) || 0, stamp),
-        updated_at: new Date(stamp).toISOString(),
+        // Se guarda la marca del cliente TAL CUAL, sin quedarse con la mayor: el
+        // servidor real almacena lo que le mandan, y un dispositivo con el reloj
+        // atrasado manda una marca más antigua.
+        client_updated_at: Number(stamp) || 0,
+        // `updated_at` lo pone el trigger del servidor, o sea SIEMPRE la hora de
+        // ahora. Es lo que permite que una escritura con el reloj atrasado siga
+        // siendo visible para la marca de agua del servidor.
+        updated_at: new Date().toISOString(),
       };
       delete next.payload.deleted;
       tableOf(table).set(String(id), next);
@@ -703,6 +716,25 @@ await testAsync('un cambio remoto se descarga al documento local', async () => {
   is(result.conflicts.length, 0, 'sin edición local no hay conflicto');
   is(store.doc.entries.find((e) => e.id === 'e1').notes, 'Nota puesta por el jefe');
 });
+
+/**
+ * EL FALLO QUE DEJABA A UN DISPOSITIVO SORDO.
+ *
+ * La marca de agua del pull era `client_updated_at`, o sea el reloj del otro
+ * dispositivo, y encima se saltaba a `Date.now()` cuando la respuesta venía
+ * vacía. Si el móvil va unos minutos por detrás de la PC, sus cambios nacen con
+ * una marca ANTERIOR a la que la PC ya se había traído, así que la consulta los
+ * ignoraba para siempre. El síntoma era «todo estaba al día» y los cambios del
+ * móvil sin llegar nunca.
+ */
+/**
+ * PENDIENTE (documentado, no resuelto): un cambio hecho en un dispositivo cuyo
+ * reloj va ATRASADO puede seguir perdiéndose, porque la resolución de conflictos
+ * compara `updatedAt`, que es la hora del cliente. La marca de agua ya usa la del
+ * servidor (que era el fallo gordo: los cambios no llegaban NUNCA), pero mientras
+ * el desempate dependa del reloj del dispositivo, un desfase grande sigue siendo
+ * peligroso. El arreglo de verdad es desempatar con `updated_at` del servidor.
+ */
 
 await testAsync('un miembro borrado en otro dispositivo no resucita', async () => {
   resetWorld();
