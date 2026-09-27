@@ -1199,16 +1199,49 @@ function wireSyncEngine() {
 async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   try {
-    const registration = await navigator.serviceWorker.register('sw.js', { scope: './' });
-    // Si hay una versión nueva esperando, se activa en la siguiente visita
+    // `updateViaCache: 'none'` evita que el propio sw.js se sirva desde la caché
+    // HTTP del navegador: sin esto, una versión nueva puede tardar días en verse.
+    const registration = await navigator.serviceWorker.register('sw.js', {
+      scope: './',
+      updateViaCache: 'none',
+    });
+
+    /**
+     * Cuando un service worker nuevo toma el control, la página que está
+     * corriendo sigue ejecutando el JavaScript VIEJO que ya tiene cargado. Eso
+     * es lo que producía el fallo más confuso posible: la app se ve bien y un
+     * botón «no hace nada», porque el manejador que falta está en el archivo
+     * nuevo que aún no se ha descargado.
+     *
+     * Así que se recarga una sola vez. Si hay un diálogo abierto se avisa en vez
+     * de recargar, para no borrar lo que el usuario esté escribiendo.
+     */
+    let recargando = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (recargando) return;
+      if (document.querySelector('dialog[open]')) {
+        notify.info('Hay una versión nueva de HORUS. Ciérrala y recarga para aplicarla.', {
+          duration: 8000, icon: 'refresh',
+        });
+        return;
+      }
+      recargando = true;
+      // La marca evita un bucle si algo va mal al recargar.
+      try { sessionStorage.setItem('horus:recarga', String(Date.now())); } catch { /* da igual */ }
+      location.reload();
+    });
+
     registration.addEventListener('updatefound', () => {
       const installing = registration.installing;
       installing?.addEventListener('statechange', () => {
         if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-          notify.info('Hay una versión nueva de HORUS. Cierra y vuelve a abrir para actualizarla.', {
-            duration: 6000,
-            icon: 'refresh',
-          });
+          // Ya no hace falta cerrar y abrir: el `controllerchange` de arriba
+          // recarga solo. Solo se avisa si hay un diálogo abierto.
+          if (document.querySelector('dialog[open]')) {
+            notify.info('Hay una versión nueva de HORUS. Ciérrala y recarga para aplicarla.', {
+              duration: 8000, icon: 'refresh',
+            });
+          }
         }
       });
     });
