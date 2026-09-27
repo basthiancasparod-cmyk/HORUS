@@ -1,27 +1,25 @@
 /**
  * HORUS — js/ui/views/today.js
  * Vista «Hoy»: la pantalla que se abre de pie, en el vestuario, con prisa.
- * Responde de un vistazo a: ¿qué hora es?, ¿quién está de guardia?, ¿qué falta
- * por cubrir?, ¿cuál es mi próximo turno?
+ * Responde de un vistazo a: ¿qué hora es?, ¿cuál es mi próximo turno?,
+ * ¿qué turnos míos vienen?, ¿hay conflictos?
  */
 
-import { byId, el, clear, icon, debounce } from '../../core/utils.js';
+import { byId, el, clear, icon } from '../../core/utils.js';
 import {
   todayKey, addDays, formatLongDate, formatDuration, formatBlocks,
   formatRelative, formatClock, humanTime, crossesMidnight, isoWeek, weekDays,
   DOW_SHORT, formatShortDate, minToTime,
 } from '../../core/date.js';
 import {
-  entryBlocks, entryType, memberById, entryIsWork, entryMinutes, shiftTypeById,
-} from '../../core/model.js';
-import {
-  analyzeDate, whoIsNow, nextShift, upcomingShifts, summarizeMonth,
+  analyzeDate, nextShift, upcomingShifts,
 } from '../../core/coverage.js';
 import { getContext, registerRenderer, getFocusDate, setFocusDate, invalidate } from '../context.js';
 import {
-  emptyState, avatar, typeBadge, notify, barRow, progressBar,
+  emptyState, avatar, typeBadge, notify,
 } from '../toolkit.js';
-import { renderCoverageStrip, coverageSummary, minLabel, openAssignDialog } from '../dialogs.js';
+import { memberById } from '../../core/model.js';
+import { openAssignDialog } from '../dialogs.js';
 
 export const VIEW = 'today';
 
@@ -39,11 +37,6 @@ export function mount(ctx) {
     week: byId('today-week'),
     count: byId('today-count'),
     next: byId('today-next'),
-    onduty: byId('today-onduty'),
-    ondutyCount: byId('today-onduty-count'),
-    coverage: byId('today-coverage'),
-    gapsSection: byId('today-gaps-section'),
-    gaps: byId('today-gaps'),
     mine: byId('today-mine'),
     conflictsSection: byId('today-conflicts-section'),
     conflicts: byId('today-conflicts'),
@@ -122,22 +115,14 @@ function render() {
   refs.tomorrowButton.onclick = () => {
     const target = isToday ? addDays(todayKey(), 1) : todayKey();
     setFocusDate(target);
+    notify.info(`Mostrando ${formatLongDate(target)}`);
     invalidate('today');
   };
 
-  /* ---------- Próximo turno ---------- */
+  /* ---------- Tu próximo turno (lo principal) ---------- */
   paintNext(doc, ctx);
 
-  /* ---------- De guardia ahora ---------- */
-  paintOnDuty(doc);
-
-  /* ---------- Cobertura ---------- */
-  paintCoverage(doc, analysis);
-
-  /* ---------- Huecos ---------- */
-  paintGaps(analysis);
-
-  /* ---------- Mis turnos ---------- */
+  /* ---------- Tus próximos turnos ---------- */
   paintMine(doc, ctx);
 
   /* ---------- Conflictos de sincronización ---------- */
@@ -150,7 +135,10 @@ function paintClock() {
   refs.clock.textContent = formatClock(now);
 }
 
-/** Tarjeta del próximo turno: cuenta atrás si es inminente. */
+/* ------------------------------------------------------------------ *
+ * Tu próximo turno (lo principal): destaca si es tuyo con "Eres tú"
+ * ------------------------------------------------------------------ */
+
 function paintNext(doc, ctx) {
   const box = refs.next;
   clear(box);
@@ -180,11 +168,12 @@ function paintNext(doc, ctx) {
   const target = mine || team;
   const minutes = target.minutesUntil;
   const soon = minutes <= 120;
+  const isMine = !!mine;
 
   const card = el('div', { class: 'next-card' }, [
     avatar(target.member, { size: 'md' }),
     el('div', { class: 'grow', style: { minWidth: '0' } }, [
-      el('div', { class: 't-2xs t-upper t-muted' }, mine ? 'Tu próximo turno' : 'Próximo turno del equipo'),
+      el('div', { class: 't-2xs t-upper t-muted' }, isMine ? 'Eres tú' : 'Próximo turno del equipo'),
       el('div', { class: 't-md t-semibold' }, [
         target.member?.name || 'Alguien',
         target.type ? ` · ${target.type.label}` : '',
@@ -192,7 +181,7 @@ function paintNext(doc, ctx) {
       el('div', { class: 't-xs t-dim' }, [
         formatBlocks([target.block]),
         crossesMidnight(target.block) ? ' (cruza medianoche)' : '',
-        target.entry.notes ? ` · ${target.entry.notes}` : '',
+        target.entry?.notes ? ` · ${target.entry.notes}` : '',
       ].join('')),
     ]),
     el('div', { class: 'text-right shrink-0' }, [
@@ -205,138 +194,12 @@ function paintNext(doc, ctx) {
     card.style.animation = 'pulse-soft 2.4s var(--ease-in-out) infinite';
   }
   box.appendChild(card);
-
-  // Si hay huecos de cobertura hoy, avisarlo aquí también
-  const analysis = analyzeDate(doc, currentDate());
-  if (analysis.gapMin > 0) {
-    box.appendChild(el('p', { class: 'field-hint', style: { marginTop: 'var(--sp-3)' } },
-      `${formatDuration(analysis.gapMin)} de hoy siguen sin cubrirse.`));
-  }
 }
 
-/** Quién está trabajando ahora mismo, con lo que le queda. */
-function paintOnDuty(doc) {
-  const box = refs.onduty;
-  clear(box);
+/* ------------------------------------------------------------------ *
+ * Tus próximos turnos (lista)
+ * ------------------------------------------------------------------ */
 
-  const now = new Date();
-  const onDuty = whoIsNow(doc, now);
-  refs.ondutyCount.textContent = String(onDuty.length);
-
-  if (!onDuty.length) {
-    box.appendChild(el('div', { class: 'card', style: { padding: 'var(--sp-4)' } }, [
-      el('div', { class: 'row', style: { gap: 'var(--sp-3)' } }, [
-        el('span', { class: 'empty-icon', style: { width: '36px', height: '36px' } }, icon('moon', 18)),
-        el('div', { class: 'grow' }, [
-          el('div', { class: 't-sm t-semibold' }, 'Nadie de guardia ahora mismo'),
-          el('div', { class: 'field-hint' }, nextOnDutyHint(doc, now)),
-        ]),
-      ]),
-    ]));
-    return;
-  }
-
-  for (const duty of onDuty) {
-    const color = duty.type?.hex || duty.member?.hex || 'var(--accent)';
-    box.appendChild(el('div', {
-      class: 'onduty-item',
-      style: { '--type-color': color },
-    }, [
-      avatar(duty.member, { size: 'sm' }),
-      el('div', { class: 'grow' }, [
-        el('div', { class: 'who' }, [
-          duty.member?.name || 'Alguien',
-          duty.continued ? el('span', { class: 'badge', style: { marginLeft: '6px' } }, 'desde ayer') : null,
-        ]),
-        el('div', { class: 'what' }, [
-          duty.type ? duty.type.label : 'Turno',
-          ` · ${minLabel(duty.start)}–${duty.end >= 1440 ? 'mañana ' : ''}${minLabel(duty.end)}`,
-        ].join('')),
-        progressBar(Math.round(duty.progress * 100), 100, {
-          className: 'shift-progress',
-          label: `Progreso del turno de ${duty.member?.name || ''}`,
-        }),
-      ]),
-      el('div', { class: 'left' }, formatDuration(duty.minutesLeft)),
-    ]));
-  }
-}
-
-function nextOnDutyHint(doc, now) {
-  const upcoming = upcomingShifts(doc, { from: now, limit: 1 });
-  if (!upcoming.length) return 'No hay más turnos en el cuadrante.';
-  const minutes = Math.round((upcoming[0].startMs - now.getTime()) / 60000);
-  return `El siguiente turno empieza ${formatRelative(minutes * 60000)} (${upcoming[0].member?.name || 'alguien'}).`;
-}
-
-/** Barra de cobertura del día + resumen numérico. */
-function paintCoverage(doc, analysis) {
-  const box = refs.coverage;
-  clear(box);
-
-  const card = el('div', { class: 'card' });
-  card.appendChild(renderCoverageStrip(analysis));
-
-  const stats = el('div', { class: 'grid-3', style: { marginTop: 'var(--sp-3)' } }, [
-    statBlock(formatDuration(analysis.coverageMin), 'cubiertas'),
-    statBlock(formatDuration(analysis.gapMin), analysis.gapMin > 0 ? 'sin cubrir' : 'sin huecos',
-      analysis.gapMin > 0 ? 't-warning' : 't-success'),
-    statBlock(String(analysis.peak), 'a la vez como máximo'),
-  ]);
-  card.appendChild(stats);
-
-  card.appendChild(el('div', { class: 'row wrap', style: { marginTop: 'var(--sp-3)', gap: 'var(--sp-3)' } }, [
-    el('span', { class: 't-2xs t-muted' }, '00:00'),
-    el('span', { class: 'grow' }),
-    el('span', { class: 't-2xs t-muted' }, '12:00'),
-    el('span', { class: 'grow' }),
-    el('span', { class: 't-2xs t-muted' }, '24:00'),
-  ]));
-
-  card.appendChild(el('p', { class: 'field-hint', style: { marginTop: 'var(--sp-2)' } },
-    coverageSummary(analysis)));
-
-  box.appendChild(card);
-}
-
-function statBlock(value, label, className = '') {
-  return el('div', {}, [
-    el('div', { class: `stat-value t-lg ${className}`.trim(), style: { fontSize: 'var(--fs-lg)' } }, value),
-    el('div', { class: 'stat-label' }, label),
-  ]);
-}
-
-/** Lista de franjas horarias sin cubrir. */
-function paintGaps(analysis) {
-  const box = refs.gaps;
-  clear(box);
-
-  if (!analysis.gaps.length) {
-    refs.gapsSection.hidden = false;
-    box.appendChild(el('div', { class: 'gap-item', style: { background: 'var(--success-soft)', borderColor: 'color-mix(in srgb, var(--success) 28%, transparent)' } }, [
-      icon('check', 16),
-      el('span', { class: 'grow' }, 'El día está completamente cubierto.'),
-    ]));
-    return;
-  }
-
-  refs.gapsSection.hidden = false;
-  const total = analysis.gaps.reduce((a, g) => a + (g.end - g.start), 0);
-  for (const gap of analysis.gaps) {
-    const duration = gap.end - gap.start;
-    box.appendChild(el('div', {
-      class: `gap-item${gap.start === 0 || gap.end === 1440 ? ' is-empty' : ''}`,
-    }, [
-      icon('alert', 16),
-      el('span', { class: 'grow' }, `${minLabel(gap.start)} – ${minLabel(gap.end)}`),
-      el('span', { class: 't-semibold t-nums' }, formatDuration(duration)),
-    ]));
-  }
-  box.appendChild(el('p', { class: 'field-hint' },
-    `${analysis.gaps.length} franja(s) · ${formatDuration(total)} descubiertas en total.`));
-}
-
-/** Los próximos turnos de la persona que está usando la app. */
 function paintMine(doc, ctx) {
   const box = refs.mine;
   clear(box);
@@ -415,7 +278,10 @@ function srgb(v) {
   return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
 }
 
-/** Aviso de cambios que otra persona pisó mientras estábamos sin conexión. */
+/* ------------------------------------------------------------------ *
+ * Conflictos de sincronización
+ * ------------------------------------------------------------------ */
+
 function paintConflicts(ctx) {
   const conflicts = ctx.sync?.conflicts?.() || [];
   const section = refs.conflictsSection;

@@ -413,7 +413,7 @@ await it('se recorren las seis secciones', async () => {
 await it('el resumen de la vista Hoy no está vacío', async () => {
   ctxNow().navigate('today');
   await sleep(30);
-  ok(env.document.getElementById('today-coverage').children.length > 0, 'hay bloque de cobertura');
+  ok(env.document.getElementById('today-mine').children.length > 0, 'hay bloque de mis turnos');
   ok(env.document.getElementById('today-next').children.length > 0, 'hay bloque de próximo turno');
 });
 

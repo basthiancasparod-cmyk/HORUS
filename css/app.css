@@ -1554,7 +1554,188 @@ table.review .col-name .member-name { font-size: var(--fs-sm); font-weight: 600;
 a.btn { text-decoration: none; }
 
 /* ==========================================================================
-   Impresión — el cuadrante del mes en una hoja
+   Responsive / Móvil — Estilos base "mobile first"
+   ========================================================================== */
+
+/* Tamaño base de fuente y línea para legibilidad en móvil */
+@media (max-width: 599px) {
+  :root {
+    --fs-xs: 0.65rem;
+    --fs-sm: 0.8125rem;
+    --fs-md: 0.9375rem;
+    --fs-lg: 1.125rem;
+    --fs-xl: 1.25rem;
+    --fs-2xl: 1.5rem;
+    --sp-1: 0.25rem;
+    --sp-2: 0.5rem;
+    --sp-3: 0.75rem;
+    --sp-4: 1rem;
+  }
+
+  /* Área táctil mínima 44×44px para todo lo clicable */
+  button, .btn, .list-item.is-clickable, .chip, .select,
+  [role="button"], [role="tab"], [type="checkbox"], [type="radio"] {
+    min-height: 44px;
+    min-width: 44px;
+    touch-action: manipulation;
+  }
+
+  /* Inputs y selects: altura cómoda para dedo */
+  input, select, textarea, .select {
+    min-height: 44px;
+    font-size: 1rem; /* evita zoom en iOS al enfocar */
+    padding: var(--sp-2) var(--sp-3);
+  }
+
+  /* Tarjetas y contenedores: menos padding, radios suaves */
+  .card, .card-header, .card-body, .card-footer,
+  .dialog-panel, .toast {
+    padding: var(--sp-3);
+    border-radius: var(--r-md);
+  }
+
+  /* Avatar: más pequeño en móvil */
+  .avatar { width: 36px; height: 36px; font-size: var(--fs-sm); }
+  .avatar-sm { width: 28px; height: 28px; font-size: var(--fs-2xs); }
+  .avatar-lg { width: 40px; height: 40px; font-size: var(--fs-sm); }
+
+  /* Badge / chip: más grande para tocar */
+  .badge, .chip, .badge-solid {
+    padding: var(--sp-1) var(--sp-2);
+    font-size: var(--fs-xs);
+    min-height: 28px;
+    line-height: 1.4;
+  }
+
+  .badge-solid { padding: 4px 10px; }
+
+  /* Botones: altura táctil, texto legible */
+  .btn {
+    min-height: 44px;
+    padding: var(--sp-2) var(--sp-4);
+    font-size: var(--fs-sm);
+    gap: var(--sp-2);
+  }
+
+  .btn-sm {
+    padding: var(--sp-1) var(--sp-3);
+    font-size: var(--fs-xs);
+    min-height: 36px;
+  }
+
+  /* Badge / chip en countdown y next-card */
+  .next-card .countdown { font-size: var(--fs-lg); }
+  .next-card { gap: var(--sp-3); padding: var(--sp-3); }
+  .next-card > .grow { min-width: 0; }
+
+  /* Avatar en next-card y lista */
+  .next-card .avatar, .list-item .avatar { width: 36px; height: 36px; font-size: var(--fs-sm); }
+
+  /* Lista de turnos (paintMine) y asignación */
+  .list-item {
+    min-height: 56px;
+    padding: var(--sp-3) var(--sp-3);
+  }
+  .list-item .title { font-size: var(--fs-sm); }
+  .list-item .sub { font-size: var(--fs-2xs); }
+  .list-item .avatar { width: 32px; height: 32px; font-size: var(--fs-2xs); }
+
+  /* Badges de tipo de turno */
+  .badge { min-width: 38px; text-align: center; padding: 4px 8px; font-size: var(--fs-2xs); }
+  .badge .t-xs { font-size: var(--fs-2xs); }
+
+  /* Grid de stats (cobertura) → se apila en móvil */
+  .grid-3, .grid-2, .stats-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--sp-2);
+  }
+  .stat-block { text-align: center; padding: var(--sp-2); }
+  .stat-value { font-size: var(--fs-xl); }
+  .stat-label { font-size: var(--fs-2xs); color: var(--text-muted); }
+
+  /* Tarjeta de próximo turno (next-card) */
+  .next-card {
+    flex-direction: column;
+    align-items: stretch;
+    text-align: center;
+    gap: var(--sp-3);
+    padding: var(--sp-4);
+  }
+  .next-card > .grow { min-width: 0; width: 100%; }
+  .next-card .avatar { margin: 0 auto; }
+  .next-card .countdown { font-size: var(--fs-xl); margin: var(--sp-2) 0; }
+
+  /* Tarjetas de turno en lista (paintMine) */
+  .list-item .badge { flex-shrink: 0; }
+
+  /* Input, select, textarea */
+  input, select, textarea {
+    font-size: 1rem; /* evita zoom en iOS */
+  }
+
+  /* Dialogs: ancho completo en móvil, menos padding */
+  .dialog-panel {
+    max-width: 100%;
+    margin: var(--sp-4);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    height: auto;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .dialog-header { padding: var(--sp-3); }
+  .dialog-body { padding: var(--sp-3); overflow-y: auto; max-height: 60vh; }
+  .dialog-footer { padding: var(--sp-3); border-top: 1px solid var(--border); display: flex; gap: var(--sp-2); justify-content: flex-end; }
+
+  /* Toast / notificaciones */
+  .toast { max-width: 100%; margin: var(--sp-2); padding: var(--sp-3); font-size: var(--fs-sm); }
+
+  /* Tablas y roster: scroll horizontal si hace falta */
+  .roster-wrap, .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .roster table { min-width: 100%; }
+
+  /* Avatar en móvil */
+  .avatar { width: 36px; height: 36px; font-size: var(--fs-sm); }
+  .avatar-sm { width: 28px; height: 28px; }
+  .avatar-lg { width: 40px; height: 40px; }
+
+  /* Botones en footer de diálogo: apilados en móvil */
+  .dialog-footer { flex-direction: column; gap: var(--sp-2); }
+  .dialog-footer .btn { width: 100%; justify-content: center; }
+}
+
+/* Tabletas y pantallas intermedias */
+@media (min-width: 600px) and (max-width: 899px) {
+  :root {
+    --fs-xs: 0.6875rem;
+    --fs-sm: 0.8125rem;
+    --fs-md: 0.9375rem;
+    --fs-lg: 1.125rem;
+  }
+  .next-card { flex-direction: row; align-items: center; text-align: left; }
+  .next-card > .grow { width: auto; min-width: 0; text-align: left; }
+  .next-card .avatar { margin: 0; }
+  .next-card .countdown { margin: 0; }
+  .next-card { text-align: left; align-items: center; }
+  .grid-3, .grid-2 { grid-template-columns: repeat(2, 1fr); }
+  .dialog-panel { max-width: 520px; margin: auto; border-radius: var(--r-lg); }
+}
+
+/* Desktop: a partir de 900px ya están los estilos base */
+@media (min-width: 900px) {
+  /* Los estilos base ya están pensados para desktop */
+  :root {
+    --fs-xs: 0.625rem;
+    --fs-sm: 0.75rem;
+    --fs-md: 0.875rem;
+    --fs-lg: 1rem;
+    --fs-xl: 1.125rem;
+    --fs-2xl: 1.5rem;
+  }
+}
+
+/* ==========================================================================
+   Print
    ========================================================================== */
 
 @media print {

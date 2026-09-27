@@ -444,9 +444,8 @@ it('los Ajustes pintan todos sus controles', () => {
 it('la vista Hoy resume el cuadrante', () => {
   contextMod.setCurrentView('today');
   contextMod.renderCurrent();
-  ok(env.document.getElementById('today-onduty').children.length > 0, 'bloque de guardia');
-  ok(env.document.getElementById('today-coverage').children.length > 0, 'bloque de cobertura');
   ok(env.document.getElementById('today-next').children.length > 0, 'próximo turno');
+  ok(env.document.getElementById('today-mine').children.length > 0, 'mis turnos');
 });
 
 /* ==================================================================== *
