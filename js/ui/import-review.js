@@ -48,6 +48,13 @@ let chosenMonth = null;
 let aiWarnings = [];
 /** true si el cuadrante que se está revisando lo leyó la IA. */
 let fromAI = false;
+/**
+ * Lectura original del archivo, sin tocar. El encuadre se ajusta sobre una copia,
+ * así que se puede probar un desplazamiento y volver atrás sin releer el archivo.
+ */
+let parseBase = null;
+/** Días que se desplaza todo el cuadrante (0 = tal cual lo leyó el lector). */
+let dayOffset = 0;
 
 /**
  * Contexto VIVO. Los manejadores se cablean una sola vez, así que no pueden
@@ -115,6 +122,8 @@ export async function openImportDialog(context, preset = {}) {
   codeDecisions = new Map();
   identidades = new Map();
   parseResult = null;
+  parseBase = null;
+  dayOffset = 0;
   chosenMonth = null;
   aiWarnings = [];
   fromAI = false;
@@ -490,6 +499,40 @@ function desplazarFecha(fecha, dias) {
   return dateKey(dt.getFullYear(), dt.getMonth(), dt.getDate());
 }
 
+/**
+ * Aplica un desplazamiento de días a TODO el cuadrante.
+ *
+ * Existe porque el encuadre lo decide quien tiene el papel delante. El lector se
+ * apoya en los números impresos de la hoja y los códigos caen bajo ellos, pero si
+ * el cuadrante de la empresa está impreso con la fila de números corrida (o el
+ * usuario ve que no cuadra), tiene que poder arreglarlo sin depender de mí. Se
+ * aplica sobre una copia, así que se puede probar y deshacer.
+ */
+function aplicarOffset(n) {
+  dayOffset = n;
+  if (!parseBase) return;
+
+  if (!n) {
+    parseResult = parseBase;
+    return;
+  }
+
+  const movida = (fecha) => {
+    const dt = fromKey(fecha);
+    if (!dt) return fecha;
+    dt.setDate(dt.getDate() + n);
+    return dateKey(dt.getFullYear(), dt.getMonth(), dt.getDate());
+  };
+
+  parseResult = {
+    ...parseBase,
+    people: parseBase.people.map((p) => ({
+      ...p,
+      entries: p.entries.map((e) => ({ ...e, date: movida(e.date) })),
+    })),
+  };
+}
+
 async function loadPdf(file) {
   setSubtitle(file.name);
   const stop = showBusy('Leyendo el cuadrante…', 'Se interpreta en tu dispositivo. Con cuadrantes grandes puede tardar unos segundos.');
@@ -511,6 +554,8 @@ async function loadPdf(file) {
 
   if (parse?.ok) {
     parseResult = parse;
+    parseBase = parse;
+    dayOffset = 0;
     fromAI = false;
     aiWarnings = [];
 
@@ -753,6 +798,8 @@ async function sendToAI(file, config, notice = null) {
     }
 
     parseResult = result;
+    parseBase = result;
+    dayOffset = 0;
     fromAI = true;
     aiWarnings = collectAiWarnings(result);
     renderReview();
@@ -1213,6 +1260,29 @@ function encuadre() {
       `${numeros.length} número(s) impresos · ${meta.columns || '?'} columnas · `
       + `el mes empieza en el ${meta.firstDay ?? '?'} y la tira acaba en ${meta.lastDay ?? '?'}. `
       + 'Compara esta tira con el papel: son los números que se han leído de la hoja.'),
+
+    /* Ajuste manual del encuadre. El lector se apoya en los números impresos y los
+       códigos caen bajo ellos, pero si el cuadrante de la empresa está impreso con
+       la fila de números corrida, quien tiene el papel delante es el que sabe cuál
+       es la fecha buena. Aquí puede corregirlo entero de una vez. */
+    el('div', { class: 'framing-offset' }, [
+      el('label', { class: 'framing-offset-label', for: 'review-offset' },
+        'Si no cuadra con el papel, desplaza el cuadrante:'),
+      (() => {
+        const select = el('select', { class: 'select', id: 'review-offset' },
+          [0, 1, -1, 2, -2].map((n) => el('option', {
+            value: String(n), selected: dayOffset === n,
+          }, n === 0 ? 'Tal cual (sin desplazar)' : `${n > 0 ? '+' : ''}${n} día${Math.abs(n) === 1 ? '' : 's'}`)));
+        select.addEventListener('change', () => {
+          aplicarOffset(Number(select.value));
+          renderReview();
+        });
+        return select;
+      })(),
+      dayOffset
+        ? el('span', { class: 'badge badge-warning' }, `desplazado ${dayOffset > 0 ? '+' : ''}${dayOffset} día(s)`)
+        : null,
+    ]),
   ]);
 }
 
