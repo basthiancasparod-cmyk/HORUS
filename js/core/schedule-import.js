@@ -848,9 +848,14 @@ export function buildEntriesFromParse(parseResult, options = {}) {
  * @param {object} store
  * @param {object[]} entries
  * @param {{year:number, month:number}} [rango] mes que se está importando (1..12)
+ * @param {object} [opciones.identities] etiqueta del cuadrante → id de miembro ya
+ *   existente. Es la respuesta del usuario a «¿es la misma persona?»: si viene,
+ *   se usa ese miembro en vez de crear una ficha nueva. Un `null` explícito
+ *   significa «es otra persona» y obliga a crear una ficha nueva aunque el nombre
+ *   coincida.
  * @returns {{imported:number, members:number, skipped:number, reasons:string[]}}
  */
-export function commitImportedEntries(store, entries, { year, month } = {}) {
+export function commitImportedEntries(store, entries, { year, month, identities = {} } = {}) {
   const resumen = { imported: 0, members: 0, skipped: 0, reasons: [] };
   if (!store || typeof store.batch !== 'function' || !Array.isArray(entries) || !entries.length) return resumen;
   if (typeof store.actions?.setEntry !== 'function') {
@@ -871,6 +876,12 @@ export function commitImportedEntries(store, entries, { year, month } = {}) {
 
   const miembros = new Map();
   for (const m of store.doc.members || []) miembros.set(clave(m.name), m.id);
+  /**
+   * Etiqueta del cuadrante → id ya resuelto en ESTA importación. Hace falta para
+   * la respuesta «es otra persona»: si no se recuerda, cada turno de esa fila
+   * crearía una ficha nueva (una por día).
+   */
+  const resueltos = new Map();
 
   try {
     store.batch('importar cuadrante del PDF', () => {
@@ -889,7 +900,16 @@ export function commitImportedEntries(store, entries, { year, month } = {}) {
         }
 
         const k = clave(e.memberLabel);
-        let memberId = miembros.get(k);
+        // Decisión del usuario sobre a quién corresponde esa fila del cuadrante:
+        // un id manda sobre todo; `null` obliga a crear ficha nueva aunque el
+        // nombre ya exista; sin decisión, se busca por nombre como siempre.
+        const decidido = Object.prototype.hasOwnProperty.call(identities, e.memberLabel)
+          ? identities[e.memberLabel]
+          : undefined;
+        let memberId = resueltos.has(e.memberLabel)
+          ? resueltos.get(e.memberLabel)
+          : (decidido === undefined ? miembros.get(k) : decidido);
+
         if (!memberId) {
           const creado = store.actions.addMember({ name: String(e.memberLabel).trim().slice(0, 40) });
           memberId = creado?.id;
@@ -897,6 +917,8 @@ export function commitImportedEntries(store, entries, { year, month } = {}) {
           miembros.set(k, memberId);
           resumen.members++;
         }
+        // Se recuerda la resolución de esta etiqueta para el resto de sus días.
+        resueltos.set(e.memberLabel, memberId);
 
         // `blocks: null` = la entrada hereda el horario del catálogo (así un
         // cambio de horario del turno se refleja en todo el cuadrante).

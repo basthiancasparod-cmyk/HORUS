@@ -407,6 +407,46 @@ await it('importar dos veces no duplica personas', () => {
   is(store.doc.members.length, membersAfterFirst, 'el equipo no crece al reimportar');
 });
 
+/**
+ * El cuadrante escribe los nombres a su manera («YORBELI C.») y la app puede
+ * tenerlos de otra («Yorbeli»). Antes eso creaba una ficha paralela. Ahora el
+ * usuario decide y el motor respeta la decisión.
+ */
+await it('si el usuario dice que es la misma persona, se reutiliza su ficha', () => {
+  const store = freshStore();
+  const existente = store.actions.addMember({ name: 'Yorbeli' });
+
+  const entries = importer.buildEntriesFromParse(parse, {});
+  importer.commitImportedEntries(store, entries, {
+    year: 2026, month: 10,
+    identities: { 'YORBELI C.': existente.id },
+  });
+
+  const yorbelis = store.doc.members.filter((m) => m.name.toLowerCase().startsWith('yorbeli'));
+  is(yorbelis.length, 1, 'solo hay una ficha de Yorbeli, no dos');
+  const suyos = store.doc.entries.filter((e) => e.memberId === existente.id);
+  ok(suyos.length > 0, 'sus turnos van a la ficha que ya existía');
+});
+
+await it('si el usuario dice que es otra persona, se crea UNA ficha nueva', () => {
+  const store = freshStore();
+  const existente = store.actions.addMember({ name: 'Yorbeli' });
+
+  const entries = importer.buildEntriesFromParse(parse, {});
+  importer.commitImportedEntries(store, entries, {
+    year: 2026, month: 10,
+    identities: { 'YORBELI C.': null },
+  });
+
+  const yorbelis = store.doc.members.filter((m) => m.name.toLowerCase().startsWith('yorbeli'));
+  is(yorbelis.length, 2, 'hay dos fichas distintas, como pidió el usuario');
+  // Una ficha por persona, no una por cada día del cuadrante.
+  const nueva = yorbelis.find((m) => m.id !== existente.id);
+  const suyos = store.doc.entries.filter((e) => e.memberId === nueva.id);
+  ok(suyos.length > 5, `sus turnos van a la ficha nueva: ${suyos.length}`);
+  notOk(store.doc.entries.some((e) => e.memberId === existente.id), 'la otra se queda sin turnos');
+});
+
 /* ==================================================================== *
  * 4. Casos límite
  * ==================================================================== */

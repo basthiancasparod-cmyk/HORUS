@@ -15,7 +15,7 @@
  * ámbar lo que no cuadra con el calendario (docs/AI-IMPORT.md).
  */
 
-import { byId, el, clear, icon } from '../core/utils.js';
+import { byId, el, clear, icon, fold } from '../core/utils.js';
 import {
   fromKey, DOW_SHORT, MONTHS, formatMonth, dateKey, daysInMonth,
 } from '../core/date.js';
@@ -36,6 +36,12 @@ let parseResult = null;
 let corrections = new Map();
 /** Decisiones sobre códigos desconocidos: código del PDF → typeCode del catálogo. */
 let codeDecisions = new Map();
+/**
+ * Decisiones de identidad: etiqueta del cuadrante → id del miembro que ya existe
+ * (o `null` si el usuario dice que es otra persona). Evita que una segunda
+ * importación cree una ficha paralela de alguien que ya está en el equipo.
+ */
+let identidades = new Map();
 /** Mes elegido a mano si el lector no lo tuvo claro. */
 let chosenMonth = null;
 /** Avisos que devolvió la IA (interpretación/transcripción). Solo informativos. */
@@ -107,6 +113,7 @@ export async function openImportDialog(context, preset = {}) {
 
   corrections = new Map();
   codeDecisions = new Map();
+  identidades = new Map();
   parseResult = null;
   chosenMonth = null;
   aiWarnings = [];
@@ -679,6 +686,12 @@ function renderReview() {
     body.appendChild(renderCodeDecisions(unknowns));
   }
 
+  // --- Personas que podrían ser las mismas que ya tienes ---
+  const parecidos = posiblesDuplicados(doc);
+  if (parecidos.length) {
+    body.appendChild(renderIdentidades(parecidos));
+  }
+
   // --- Mes dudoso: ofrecer cambiarlo ---
   if (parseResult.monthConfidence !== 'high') {
     // Si lo leyó la IA y no ha podido confirmar el mes, el aviso va bien visible.
@@ -809,6 +822,89 @@ function renderCodeDecisions(unknowns) {
   box.appendChild(list);
   return box;
 }
+
+/* ------------------------------------------------------------------ *
+ * ¿Es la misma persona?
+ * ------------------------------------------------------------------ */
+
+/**
+ * Busca filas del cuadrante cuyo nombre se PARECE al de alguien que ya está en el
+ * equipo, sin ser idéntico: «YORBELI C.» frente a «Yorbeli», «JAVIER» frente a
+ * «Javier Pérez». Es el caso que creaba fichas duplicadas al importar dos veces
+ * (una por PDF y otra con la IA, que escribe los nombres a su manera).
+ *
+ * El nombre EXACTO no se pregunta: si coincide, se reutiliza su ficha y ya está.
+ */
+function posiblesDuplicados(doc) {
+  const miembros = doc.members || [];
+  if (!miembros.length) return [];
+
+  const out = [];
+  for (const persona of parseResult.people) {
+    const suyo = fold(persona.label);
+    if (!suyo) continue;
+
+    const candidatos = miembros.filter((m) => {
+      const otro = fold(m.name);
+      if (!otro) return false;
+      if (otro === suyo) return false; // idéntico: se reutiliza sin preguntar
+      // Se parecen si uno empieza por el otro, o si comparten la primera palabra.
+      const primera = (s) => s.split(/\s+/)[0];
+      return otro.startsWith(suyo) || suyo.startsWith(otro) || primera(otro) === primera(suyo);
+    });
+
+    if (candidatos.length) out.push({ label: persona.label, candidatos });
+  }
+  return out;
+}
+
+function renderIdentidades(parecidos) {
+  const box = el('div', { style: { marginBottom: 'var(--sp-4)' } }, [
+    el('div', { class: 'section-label', style: { marginBottom: 'var(--sp-2)' } },
+      '¿Son las mismas personas?'),
+    el('div', { class: 'sub', style: { marginBottom: 'var(--sp-2)' } },
+      'Estos nombres del cuadrante se parecen a gente que ya tienes en el equipo. '
+      + 'Elige la ficha que les corresponde para que no se dupliquen.'),
+  ]);
+
+  const list = el('div', { class: 'code-decisions' });
+  const doc = ctx.doc;
+
+  for (const { label, candidatos } of parecidos) {
+    // Por defecto se propone la ficha que ya existe: es lo que evita el duplicado,
+    // y el usuario puede cambiarlo a «es otra persona» si de verdad lo es.
+    const elegido = identidades.has(label) ? identidades.get(label) : candidatos[0].id;
+
+    const select = el('select', { class: 'select', 'aria-label': `A quién corresponde ${label}` }, [
+      el('option', { value: '', selected: !elegido }, '— Es otra persona: crear ficha nueva —'),
+      ...candidatos.map((m) => el('option', {
+        value: m.id, selected: elegido === m.id,
+      }, `${m.name} · ${doc.entries.filter((e) => e.memberId === m.id).length} turnos`)),
+    ]);
+
+    select.addEventListener('change', () => {
+      if (select.value) identidades.set(label, select.value);
+      else identidades.set(label, null);
+      renderReview();
+    });
+
+    list.appendChild(el('div', { class: 'code-decision' }, [
+      el('span', { class: 'code-badge' }, label),
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'label' }, elegido ? 'Se usará la ficha que ya existe' : 'Se creará una ficha nueva'),
+        el('div', { class: 'sub' }, elegido
+          ? 'Sus turnos de este mes se añadirán a esa persona.'
+          : 'Tendrás dos fichas con nombres parecidos.'),
+      ]),
+      select,
+    ]));
+  }
+
+  box.appendChild(list);
+  return box;
+}
+
+
 
 /* ------------------------------------------------------------------ *
  * Selector de mes
@@ -1107,7 +1203,12 @@ async function commit() {
       ),
     });
 
-    const result = mod.commitImportedEntries(liveCtx().store, entries, { year, month });
+    const result = mod.commitImportedEntries(liveCtx().store, entries, {
+      year,
+      month,
+      // Respuestas a «¿es la misma persona?»: evitan crear fichas paralelas.
+      identities: Object.fromEntries(identidades),
+    });
 
     // Todo lo de después va en su propio try: cerrar y avisar es cosmético y no
     // puede convertir una importación correcta en un error.
