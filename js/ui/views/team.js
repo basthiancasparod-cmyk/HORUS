@@ -14,7 +14,7 @@ import { byId, el, clear, icon, plural } from '../../core/utils.js';
 import {
   getContext, getFocusDate, invalidate, registerRenderer, setFilter,
 } from '../context.js';
-import { avatar, barRow, emptyState, notify } from '../toolkit.js';
+import { avatar, barRow, emptyState, notify, confirmAction } from '../toolkit.js';
 import * as dialogs from '../dialogs.js';
 import {
   analyzeMonth, findConflicts, summarizeMonth, weeklyBreakdown,
@@ -459,12 +459,126 @@ function renderByType(summary) {
  * Avisos
  * ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ *
+ * Fichas duplicadas: detectarlas y unirlas
+ * ------------------------------------------------------------------ */
+
+const soloNombre = (s) => String(s || '')
+  .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .trim().replace(/\s+/g, ' ').toUpperCase();
+
+/** Turnos que tiene una ficha (para saber cuál conviene conservar). */
+function entradasDe(doc, memberId) {
+  return (doc.entries || []).filter((e) => e.memberId === memberId).length;
+}
+
+/**
+ * Grupos de fichas que se llaman igual (mismo nombre normalizado).
+ *
+ * Solo se avisa cuando el nombre coincide EXACTAMENTE tras normalizar: unir
+ * «Javier» con «Javier Pérez» a lo bruto podría juntar a dos personas distintas,
+ * así que eso no se propone solo.
+ */
+export function gruposDuplicados(doc) {
+  const porNombre = new Map();
+  for (const m of doc.members || []) {
+    const k = soloNombre(m.name);
+    if (!k) continue;
+    if (!porNombre.has(k)) porNombre.set(k, []);
+    porNombre.get(k).push(m);
+  }
+  return [...porNombre.values()].filter((g) => g.length > 1);
+}
+
+/**
+ * Une un grupo de fichas en una sola.
+ *
+ * Se conserva la que más turnos tiene (y si hay empate, la que es «yo»): es la
+ * que casi siempre tiene los datos buenos. Los turnos de las otras se pasan a la
+ * que se queda, y si una fecha ya estaba ocupada en la ficha buena NO se pisa:
+ * se cuenta y se avisa, porque decidir cuál de los dos turnos vale es cosa del
+ * usuario, no de la app.
+ */
+export async function unirFichas(ctx, doc, grupo) {
+  const { actions } = ctx;
+  /* Se conserva TU ficha si está en el grupo: así no se pierde quién eres y no
+     hay que reapuntar `meId` (que es lo que hacía que «mi próximo turno» siguiera
+     vacío después de unir). Si no eres ninguna, se conserva la que más turnos
+     tiene, que es la que casi siempre trae los datos buenos. */
+  const orden = [...grupo].sort((a, b) => {
+    const yo = (m) => (m.id === doc.meId ? 1 : 0);
+    return (yo(b) - yo(a)) || (entradasDe(doc, b.id) - entradasDe(doc, a.id));
+  });
+  const queda = orden[0];
+  const otras = orden.slice(1);
+
+  const ok = await confirmAction({
+    title: `Unir ${grupo.length} fichas en una`,
+    message: `Se conservará «${queda.name}» con sus ${plural(entradasDe(doc, queda.id), 'turno', 'turnos')}, `
+      + `y se le pasarán los turnos de ${otras.map((m) => `«${m.name}»`).join(' y ')}. `
+      + 'Las fichas sobrantes desaparecen. Si una fecha ya tiene turno en la ficha que se queda, se respeta el suyo.',
+    confirmLabel: 'Unir',
+  });
+  if (!ok) return;
+
+  const fechasDe = (id) => new Set((doc.entries || []).filter((e) => e.memberId === id).map((e) => e.date));
+  const ocupadas = fechasDe(queda.id);
+
+  let movidos = 0;
+  let respetados = 0;
+
+  ctx.batch('unir fichas duplicadas', () => {
+    for (const otra of otras) {
+      for (const entrada of (doc.entries || []).filter((e) => e.memberId === otra.id)) {
+        if (ocupadas.has(entrada.date)) { respetados++; continue; }
+        actions.setEntry({
+          memberId: queda.id,
+          date: entrada.date,
+          typeId: entrada.typeId,
+          notes: entrada.notes || undefined,
+        });
+        ocupadas.add(entrada.date);
+        movidos++;
+      }
+      actions.removeMember(otra.id);
+    }
+
+    // Red de seguridad: si por lo que sea tu ficha se ha ido, «yo» pasa a ser la
+    // que se queda, para que el dashboard no se quede sin saber quién eres.
+    if (doc.meId !== queda.id && grupo.some((m) => m.id === doc.meId)) {
+      actions.setMe(queda.id);
+    }
+  });
+
+  notify.success(
+    `Fichas unidas en «${queda.name}» · ${movidos} turno(s) movidos`
+    + (respetados ? ` · ${respetados} fecha(s) ya tenían turno y se han respetado` : ''),
+    { duration: 8000, action: { label: 'Deshacer', onClick: () => ctx.undo() } },
+  );
+}
+
 function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from, to }) {
   if (!refs.alerts || !refs.alertsSection) return;
   clear(refs.alerts);
 
   /** @type {{text:string, detail?:string, serious?:boolean, action?:{label:string,onClick:Function}}[]} */
   const alerts = [];
+
+  /* 0) FICHAS REPETIDAS.
+     Al importar el cuadrante en dos dispositivos, o al importarlo dos veces (por
+     PDF y con la IA, que escribe los nombres a su manera), es facil acabar con
+     dos fichas de la misma persona. El sintoma tipico es ver al companero dos
+     veces en el editor de un dia, con un turno distinto en cada una, y que «mi
+     proximo turno» no encuentre nada porque la app apunta a la ficha vacia. */
+  for (const grupo of gruposDuplicados(doc)) {
+    const nombres = grupo.map((m) => `${m.name} (${plural(entradasDe(doc, m.id), 'turno', 'turnos')})`).join(' · ');
+    alerts.push({
+      text: `Puede haber ${grupo.length} fichas de la misma persona: ${grupo[0].name || 'sin nombre'}`,
+      detail: `${nombres}. Unirlas deja una sola ficha con todos sus turnos.`,
+      serious: true,
+      action: { label: 'Unir fichas', onClick: () => unirFichas(ctx, doc, grupo) },
+    });
+  }
 
   // 1) Jornada semanal superada. Solo se avisa de las semanas que se pasan:
   //    las semanas parciales de los extremos del mes nunca dan falso positivo.

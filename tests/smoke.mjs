@@ -767,6 +767,49 @@ it('el editor de día se abre y guarda la marca y las notas', () => {
   is(dialog.open, false, 'se cerró');
 });
 
+/* ------------------------------------------------------------------ *
+ * Fichas duplicadas
+ * ------------------------------------------------------------------ */
+
+describe('Unir fichas repetidas');
+
+await itAsync('detecta dos fichas con el mismo nombre y las une sin pisar turnos', async () => {
+  env.reset();
+  const doc = model.bootstrapDocument({ name: 'Javier', coworkers: [] });
+  doc.settings.firstRun = false;
+  const store = storeMod.createStore(doc);
+  const ctx = mountAll(store);
+
+  // Dos fichas de la misma persona, como quedan al importar dos veces.
+  const otra = store.actions.addMember({ name: 'JAVIER' });
+  const original = store.doc.members.find((m) => m.id === doc.meId);
+  const M = store.doc.shiftTypes.find((s) => s.code === 'M');
+  const T = store.doc.shiftTypes.find((s) => s.code === 'T');
+
+  store.actions.setEntry({ memberId: original.id, date: '2025-06-02', typeId: M.id });
+  store.actions.setEntry({ memberId: otra.id, date: '2025-06-03', typeId: T.id });
+  // Y un día que tienen las dos: no se debe pisar el de la ficha que se queda.
+  store.actions.setEntry({ memberId: otra.id, date: '2025-06-02', typeId: T.id });
+
+  const grupos = teamView.gruposDuplicados(store.doc);
+  is(grupos.length, 1, 'se detecta un grupo de fichas repetidas');
+  is(grupos[0].length, 2, 'con dos fichas');
+
+  // La unión pregunta antes: se acepta y se espera a que termine.
+  const enCurso = teamView.unirFichas(ctx, store.doc, grupos[0]);
+  await sleep(10);
+  env.document.getElementById('confirm-ok').click();
+  await enCurso;
+
+  const quedan = store.doc.members.filter((m) => /javier/i.test(m.name));
+  is(quedan.length, 1, 'queda una sola ficha');
+  const suyos = store.doc.entries.filter((e) => e.memberId === quedan[0].id);
+  is(suyos.length, 2, 'con los dos turnos, no tres');
+  is(suyos.filter((e) => e.date === '2025-06-02')[0].typeId, M.id,
+    'en la fecha repetida se respeta el turno de la ficha que se queda');
+  is(suyos.some((e) => e.date === '2025-06-03'), true, 'y se ha traído el turno de la otra');
+});
+
 it('el editor de día marca y desmarca festivo', () => {
   const store = storeMod.createStore(fullDoc());
   const ctx = mountAll(store);
