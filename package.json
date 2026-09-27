@@ -5,16 +5,20 @@
   "description": "HORUS — calendario de turnos compartido por equipo (PWA, sin build step)",
   "type": "module",
   "scripts": {
-    "test": "node tests/run.js && node tests/io.js && node tests/scenario.js && node tests/smoke.mjs && node tests/app.mjs",
+    "test": "node tests/run.js && node tests/io.js && node tests/scenario.js && node tests/smoke.mjs && node tests/app.mjs && node tests/import.mjs && node tests/ai.mjs",
     "test:core": "node tests/run.js",
     "test:io": "node tests/io.js",
     "test:scenario": "node tests/scenario.js",
     "test:ui": "node tests/smoke.mjs",
     "test:app": "node tests/app.mjs",
+    "test:import": "node tests/import.mjs",
+    "test:ai": "node tests/ai.mjs",
     "check": "node tools/check.mjs",
-    "verify": "npm run check && npm test",
+    "check:sql": "node tools/sql-order.mjs",
+    "verify": "npm run check && npm run check:sql && npm test",
     "icons": "node tools/make-icons.mjs",
-    "serve": "node tools/serve.mjs"
+    "serve": "node tools/serve.mjs",
+    "pdf": "node tools/pdf-text.mjs"
   },
   "engines": {
     "node": ">=18"

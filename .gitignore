@@ -3,3 +3,15 @@ node_modules/
 *.log
 .DS_Store
 Thumbs.db
+
+# Claves de la IA: NUNCA al repositorio. La clave se escribe en Ajustes y se
+# queda en el dispositivo; esto es sólo una red de seguridad por si alguien
+# prueba con un archivo suelto.
+.env.*
+*.key
+claves*.txt
+
+# Cuadrantes reales de la empresa: llevan nombres de compañeros y el repositorio
+# es público. Cada uno pone el suyo aquí en local para poder ejecutar
+# `node tests/import.mjs`, pero no se publica.
+tests/fixtures/*.pdf

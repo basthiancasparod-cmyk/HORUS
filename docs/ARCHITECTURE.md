@@ -262,7 +262,68 @@ el icono de la app instalada, con la notificación de la página como respaldo.
 
 ---
 
-## 9. Interfaz
+## 9. Importar el cuadrante desde el PDF de la empresa
+
+En muchos sitios el cuadrante llega como un PDF que reparte la empresa, hecho con
+«Imprimir a PDF». Ese PDF **es texto real**, aunque no se pueda copiar bien a
+mano, así que se puede leer con exactitud en lugar de adivinar con OCR o con un
+modelo de lenguaje.
+
+La cadena es:
+
+```
+PDF (bytes)
+  → js/core/pdf-text.js       interpreta el flujo de contenido y devuelve
+                              fragmentos de texto CON SU POSICIÓN en la página
+  → js/core/schedule-import.js  reconoce la rejilla: personas × días, mes, códigos
+  → js/ui/import-review.js    pantalla de revisión: nada se guarda sin que lo veas
+  → store.actions.setEntry    volcado al cuadrante en UN solo paso de deshacer
+```
+
+Tres decisiones que sostienen esto:
+
+1. **Las posiciones hay que calcularlas, no leerlas.** El extractor mantiene la
+   pila de estados gráficos (`q`/`Q`), la matriz de transformación (`cm`) y las
+   matrices de texto (`Tm`/`Td`/`TD`/`T*`), y aplica la CTM a cada fragmento. Y,
+   sobre todo, **no supone cuánto avanza cada letra**: lee los anchos reales del
+   array `/W` de cada fuente. Suponer 0,5 em por carácter fue un error caro: en
+   este cuadrante la `M` mide 0,854 em, la `I` 0,251 y los dígitos 0,506, así que
+   el desfase se acumulaba a lo largo de cada fila y las columnas de la derecha
+   acababan casi una casilla corridas. Como cada fila tiene letras distintas, el
+   error era **distinto en cada fila**, y por eso la rejilla podía parecer
+   correcta y estar mal por una persona.
+2. **La señal autoritativa es el número de día impreso.** Se reconstruye la
+   tirada de dígitos (28, 29, 30, 1, 2… 30) y se comprueba cada columna contra el
+   calendario real. Las letras `L M X J V S D` de la cabecera son una señal
+   **secundaria**: sirven de contraste, pero si discrepan manda el número. Que el
+   número no cuadre y que la columna no traiga número son cosas distintas, y se
+   cuentan por separado: lo segundo es «no verificable», no «mal».
+3. **El mes no se adivina: se comprueba.** Se lee la cabecera (`OCTUBRE 26`), pero
+   manda la comprobación por día: para cada día que aparece en la hoja, el día de
+   la semana de la fecha candidata tiene que coincidir. Si cuadra todo, confianza
+   alta; si no, se ofrecen candidatos y decide el usuario. Un cuadrante con las
+   fechas corridas es peor que no importar nada. Y aquí hay un detalle que
+   engaña: la comprobación por día de la semana es **periódica módulo 7**, así que
+   varios meses «cuadran»; desempata la cabecera de texto.
+4. **La revisión no es opcional.** El lector marca cada casilla con su confianza.
+   Lo dudoso se enseña en ámbar, lo desconocido en rojo, y los códigos que no
+   reconoce se agrupan para que el usuario diga qué turno son. El parser **nunca**
+   inventa un turno, **nunca** cambia el catálogo por su cuenta y **nunca**
+   descarta una casilla en silencio. Y si el PDF es un escaneo o el formato no se
+   reconoce, lo dice y ofrece pegar el texto o usar el CSV, en lugar de producir
+   una rejilla vacía que parezca correcta.
+
+Y una nota sobre las pruebas, porque es lo que evitó que esto se quedara mal para
+siempre: **no basta con que el lector no explote**. `tests/import.mjs` compara
+personas concretas casilla a casilla contra la verdad de referencia medida sobre
+el PDF. Sin eso, un desfase de un día pasa desapercibido durante semanas — pasó.
+
+El formato concreto del cuadrante analizado, con las coordenadas medidas, está en
+[`PDF-FORMAT.md`](PDF-FORMAT.md).
+
+---
+
+## 10. Interfaz
 
 - **`context.js`** centraliza navegación, fecha en foco, filtros y repintado. El
   repintado se agenda por frame y **solo se ejecuta para la vista visible**:
@@ -288,7 +349,7 @@ el icono de la app instalada, con la notificación de la página como respaldo.
 
 ---
 
-## 10. Qué se arregló respecto a la versión anterior
+## 11. Qué se arregló respecto a la versión anterior
 
 | Problema de la v1 | Qué había | Qué hay ahora |
 |---|---|---|
@@ -306,7 +367,7 @@ el icono de la app instalada, con la notificación de la página como respaldo.
 
 ---
 
-## 11. Decisiones discutibles (y por qué)
+## 12. Decisiones discutibles (y por qué)
 
 - **Sin framework y sin compilación.** El alcance no lo necesita y así la
   aplicación se sirve como archivos estáticos, se instala y se depura sin

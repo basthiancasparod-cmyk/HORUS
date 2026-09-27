@@ -19,6 +19,23 @@ romper nada. Crea las tablas `horus_documents`, `horus_members`,
 `horus_teams`, `horus_team_members`, activa RLS con políticas por usuario y
 deja intactas las tablas antiguas (`user_data`, `profiles`).
 
+> **Si te salió `42P01: relation "public.horus_team_members" does not exist`**
+> (en la línea 88), tenías una copia antigua del archivo: los helpers de equipo
+> se creaban antes que las tablas que consultan. Como son funciones
+> `language sql`, Postgres planifica su cuerpo al crearlas y el script entero
+> se caía. Ya está corregido: vuelve a copiar el archivo entero y ejecútalo. No
+> hay nada que limpiar, porque el error abortó la transacción completa.
+
+### Comprobar el esquema sin Supabase
+
+```bash
+npm run check:sql     # orden de las definiciones (detecta el 42P01 de arriba)
+```
+
+`tools/sql-order.mjs` lee la migración y avisa si algún objeto se usa antes de
+estar definido. No sustituye a probarlo en Supabase, pero caza el fallo más
+fácil de cometer a mano.
+
 ## 2. La app funciona sin Supabase
 
 - **Con Supabase**: sincronización en la nube entre dispositivos, equipos e
@@ -58,6 +75,7 @@ por completo. No la pongas en el repo, ni en el cliente, ni en una captura.
 | `401 Unauthorized` / `JWT expired` | la sesión caducó | vuelve a iniciar sesión en la app |
 | `403` o el `select` devuelve `[]` sin error | RLS ha bloqueado la fila (falta política, o el `user_id` no es el de la sesión) | revisa las políticas de esa tabla y que el `user_id` insertado sea `auth.uid()` |
 | `relation "public.horus_entries" does not exist` | la migración no se ha aplicado (o se aplicó en otro proyecto) | ejecuta `0001_horus_schema.sql` en el SQL Editor de ESE proyecto |
+| `relation "public.horus_team_members" does not exist` en la línea 88 | copia antigua de la migración (los helpers iban antes que las tablas) | copia otra vez el archivo entero; la transacción abortada no dejó nada a medias |
 | `42P17 infinite recursion detected in policy` | una política lee la misma tabla que protege | usa los helpers `security definer` (`horus_is_team_member`) como hace la migración |
 | El segundo dispositivo no se actualiza solo | falta la tabla en la publicación Realtime | vuelve a ejecutar la migración (añade las tablas a `supabase_realtime`) |
 | Los datos no suben pero no hay error | sin sesión iniciada o sin URL/anon key configuradas | inicia sesión; revisa la configuración del cliente |

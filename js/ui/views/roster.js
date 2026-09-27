@@ -92,6 +92,7 @@ export function mount(ctx) {
     pattern: byId('roster-pattern'),
     copyweek: byId('roster-copyweek'),
     holiday: byId('roster-holiday'),
+    import: byId('roster-import'),
   };
 
   // Si no hay fecha en foco, el cuadrante arranca en el mes de hoy. Se hace
@@ -156,6 +157,7 @@ function wireStaticControls() {
   if (dom.pattern) dom.pattern.onclick = () => dialogs.openPatternDialog(getContext(), { mode: 'pattern' });
   if (dom.copyweek) dom.copyweek.onclick = () => openCopyWeekDialog();
   if (dom.holiday) dom.holiday.onclick = () => openHolidayDialog();
+  if (dom.import) dom.import.onclick = () => getContext().openImport();
 }
 
 /** Mueve el mes en foco `delta` meses y repinta. */

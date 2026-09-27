@@ -22,6 +22,7 @@ son otras:
 | ¿Cuántas horas lleva cada uno, y cuántas de noche? | **Horas** → mes, trimestre o año, con objetivos y desviaciones |
 | ¿Quién está por encima de su contrato esta semana? | **Equipo** → avisos y carga de trabajo |
 | ¿Puedo enseñárselo al grupo del trabajo? | **Exportar** → texto para pegar, CSV para Excel, `.ics` para el calendario del móvil |
+| ¿Tengo que picar el cuadrante a mano? | **Importar** → lee el PDF que reparte la empresa y lo pasa a la rejilla |
 
 ## Funciones
 
@@ -49,6 +50,20 @@ son otras:
 - **Fiables:** los temporizadores se programan solo para lo inmediato y un
   vigilante recupera los avisos que se perdieron al cerrar la pestaña o suspender
   el móvil, sin repetirlos.
+
+**Importar el cuadrante en PDF**
+- Lee el PDF que reparte la empresa (el de «Imprimir a PDF», con texto real) y
+  lo convierte en la rejilla del mes, persona por persona. **Todo en el
+  dispositivo**: el archivo no se sube a ningún servidor.
+- Detecta el mes solo, y lo **comprueba** con los días de la semana: si el 16
+  cae en viernes, cuadra. Si no cuadra, te pregunta en lugar de adivinar.
+- **Pantalla de revisión obligatoria**: nada se guarda sin que lo veas. Lo que
+  el lector no tiene claro se marca en ámbar y los códigos que no reconoce se
+  agrupan para que les digas qué turno son (y lo recuerda la próxima vez).
+- Se importa en un solo paso, así que se deshace entero de una vez.
+- Si el PDF es un escaneo o el formato no se reconoce, lo dice claramente y no
+  inventa nada. Siempre queda la opción de pegar el cuadrante como texto o
+  importar un CSV.
 
 **Datos**
 - Todo funciona sin conexión: la aplicación abre y se usa igual sin internet.
@@ -128,11 +143,15 @@ js/
     exporter.js       JSON, CSV, iCal y texto
     reminders.js      Avisos de turno
     holidays.js       Festivos de España (fijos y de Semana Santa)
+    pdf-text.js       Lector de PDF: texto real con su posición en la página
+    schedule-import.js  Reconoce la rejilla del cuadrante (personas × días)
+    ai-vision.js      Lee el cuadrante de una foto con IA (Gemini, Mistral, OpenRouter)
     utils.js          DOM, texto, archivos, CSV
   ui/
     context.js        Contexto compartido, navegación, repintado por frames
     toolkit.js        Piezas de interfaz reutilizables
     dialogs.js        Todos los diálogos (asignar, día, turnos, personas…)
+    import-review.js  Diálogo de importación y pantalla de revisión
     views/            Una vista por sección: today, calendar, roster, team,
                       hours, settings
 supabase/
@@ -142,10 +161,15 @@ tests/                Ver «Pruebas»
 tools/
   serve.mjs           Servidor de desarrollo
   check.mjs           Comprobador estático del proyecto
+  sql-order.mjs       Comprueba el orden de las definiciones de la migración
   make-icons.mjs      Genera los iconos PNG
+  pdf-text.mjs        Volcado de texto y coordenadas de un PDF (diagnóstico)
+  pdf-grid.mjs        Volcado de la rejilla detectada en un cuadrante
 docs/
   ARCHITECTURE.md     Decisiones de diseño y qué se arregló respecto a la v1
   VIEW-CONTRACT.md    Contrato para escribir una vista nueva
+  PDF-FORMAT.md       Formato del cuadrante en PDF, medido y documentado
+  AI-IMPORT.md        Leer el cuadrante de una foto: contrato y hallazgos medidos
 ```
 
 ---
@@ -153,8 +177,9 @@ docs/
 ## Pruebas
 
 ```bash
-npm run verify     # comprobación estática + las 5 suites
+npm run verify     # comprobación estática + orden del SQL + las 6 suites
 npm test           # solo las suites
+npm run check:sql  # solo el orden de las definiciones de la migración
 ```
 
 | Suite | Qué comprueba | Pruebas |
@@ -164,12 +189,28 @@ npm test           # solo las suites
 | `tests/scenario.js` | Un equipo real: 5 personas, rotaciones, noche, festivos y rendimiento | 81 |
 | `tests/smoke.mjs` | Las 6 vistas montadas sobre el `index.html` real, con clics y diálogos | 65 |
 | `tests/app.mjs` | Arranque real: asistente, uso, recarga, migración, exportación | 21 |
+| `tests/import.mjs` | Importación del cuadrante desde un PDF real: lectura, rejilla, verdad de referencia y volcado | 30 |
 | `tools/check.mjs` | Enlazado de módulos, ids del HTML, clases CSS, precache, manifiesto | — |
+| `tools/sql-order.mjs` | Orden de las definiciones de la migración de Supabase (evita el `42P01`) | — |
 
 El núcleo es puro y se ejecuta en Node sin navegador. Las vistas se prueban con
 un DOM mínimo escrito para la ocasión (`tests/dom.mjs`), que implementa lo que
 HORUS usa de verdad, incluido el comportamiento real de `<select>`, `<dialog>` y
 `DocumentFragment`.
+
+La suite de importación trabaja sobre un cuadrante real, que se copia a mano en
+`tests/fixtures/cuadrante-octubre-henares.pdf`. **Ese archivo no viaja en el
+repositorio** (está en `.gitignore`): es un cuadrante de verdad, con nombres de
+compañeros, y el repositorio es público. Si no está, la suite se salta con un
+aviso claro en vez de fallar; con un cuadrante propio en esa ruta se ejecuta
+entera, incluida la comprobación casilla a casilla.
+
+Para ver qué saca el lector de un PDF cualquiera:
+
+```bash
+node tools/pdf-text.mjs ruta/al/cuadrante.pdf --rows   # texto con coordenadas
+node tools/pdf-grid.mjs ruta/al/cuadrante.pdf          # resumen de la rejilla
+```
 
 ---
 

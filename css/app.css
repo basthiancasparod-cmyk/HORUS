@@ -1238,6 +1238,322 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 .pick-item[aria-pressed='true'] { background: var(--accent-soft); color: var(--accent); }
 
 /* ==========================================================================
+   IMPORTAR UN CUADRANTE DESDE PDF
+   Pantalla de revisión: lo detectado se enseña siempre antes de guardar, y lo
+   dudoso se marca para que el usuario lo decida.
+   ========================================================================== */
+
+/* Zona de arrastre del archivo */
+.drop-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-8) var(--sp-5);
+  text-align: center;
+  background: var(--surface-2);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  transition: border-color var(--dur-base) var(--ease-out), background-color var(--dur-base) var(--ease-out);
+}
+
+.drop-zone.is-over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.drop-zone .drop-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 50%;
+}
+
+.drop-zone h3 { font-size: var(--fs-md); }
+.drop-zone p { font-size: var(--fs-sm); color: var(--text-dim); margin: 0; max-width: 42ch; }
+
+/* Resumen de lo detectado */
+.import-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: var(--sp-2);
+}
+
+.import-summary .stat-value { font-size: var(--fs-xl); }
+
+/* Rejilla de revisión: personas × días detectados */
+.review-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  -webkit-overflow-scrolling: touch;
+}
+
+table.review {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--fs-xs);
+}
+
+table.review th,
+table.review td {
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  padding: 0;
+  text-align: center;
+}
+
+table.review thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--bg-elevated);
+  padding: var(--sp-1);
+  min-width: 32px;
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+table.review thead th.is-weekend { color: var(--text-muted); background: var(--surface-2); }
+table.review thead th.is-sunday { color: var(--danger); }
+table.review thead th .th-dow { display: block; font-size: 8px; opacity: 0.75; }
+table.review thead th .th-num { display: block; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+
+table.review .col-name {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  min-width: 126px;
+  padding: var(--sp-2);
+  text-align: left;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+}
+
+table.review thead .col-name { z-index: 4; }
+table.review .col-name .member-line { display: flex; align-items: center; gap: var(--sp-2); }
+table.review .col-name .member-name { font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+
+/* Celda detectada */
+.review-cell {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 30px;
+  min-width: 32px;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.review-cell:hover { background: var(--surface-2); }
+
+/* Marca de duda: es lo que el usuario debe repasar */
+.review-cell.is-low {
+  background: var(--warning-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent);
+}
+
+.review-cell.is-unknown {
+  background: var(--danger-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+.review-cell.is-empty { color: var(--text-muted); }
+
+.review-cell .cell-code {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 3px;
+  border-radius: var(--r-xs);
+  background: var(--type-color, var(--surface-3));
+  color: var(--type-fg, var(--text));
+  font-size: 10px;
+}
+
+.review-cell.is-empty .cell-code { background: transparent; color: var(--text-muted); }
+
+/* Lista de códigos desconocidos que hay que decidir */
+.code-decisions { display: flex; flex-direction: column; gap: var(--sp-2); }
+
+.code-decision {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 28%, transparent);
+  border-radius: var(--r-md);
+}
+
+.code-decision .code-badge {
+  display: grid;
+  place-items: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 var(--sp-2);
+  background: var(--danger);
+  color: #fff;
+  border-radius: var(--r-sm);
+  font-weight: 800;
+  font-size: var(--fs-md);
+}
+
+.code-decision .grow { min-width: 0; }
+.code-decision .label { font-size: var(--fs-sm); font-weight: 600; }
+.code-decision .sub { font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; }
+.code-decision select { max-width: 190px; }
+
+/* Lista de avisos del análisis */
+.import-issues { display: flex; flex-direction: column; gap: var(--sp-1); }
+.import-issues li {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  padding-left: var(--sp-4);
+  position: relative;
+}
+.import-issues li::before {
+  content: '·';
+  position: absolute;
+  left: var(--sp-2);
+  color: var(--warning);
+  font-weight: 700;
+}
+
+/* Leyenda de la revisión */
+.review-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  font-size: var(--fs-2xs);
+  color: var(--text-dim);
+}
+
+.review-legend span { display: flex; align-items: center; gap: var(--sp-1); }
+.review-legend .swatch-box {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+}
+
+/* ==========================================================================
+   IMPORTAR CON IA (BYOK)
+   El aviso de privacidad de Ajustes, las fases honestas de la lectura y los
+   avisos que devuelve la interpretación.
+   ========================================================================== */
+
+/* Aviso de privacidad: tiene que leerse, no pasar desapercibido */
+.ai-notice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--warning-soft);
+  border: 1px solid color-mix(in srgb, var(--warning) 32%, transparent);
+  border-radius: var(--r-md);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.ai-notice .label { font-size: var(--fs-sm); font-weight: 700; color: var(--text); }
+.ai-notice strong { color: var(--text); }
+.ai-notice ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-4);
+}
+
+/* Fases de la lectura con IA: pasos, nunca un porcentaje inventado */
+.import-phases {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: 100%;
+  max-width: 34ch;
+  margin-top: var(--sp-2);
+  text-align: left;
+}
+
+.import-phase {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.import-phase .phase-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+}
+
+.import-phase.is-current { color: var(--text); font-weight: 600; }
+.import-phase.is-current .phase-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  animation: pulse-soft 1.4s var(--ease-out) infinite;
+}
+
+.import-phase.is-done { color: var(--text-dim); }
+.import-phase.is-done .phase-dot { background: var(--success); border-color: var(--success); }
+
+/* Avisos de la interpretación de la IA (aditivo a la revisión de siempre) */
+.ai-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--info-soft);
+  border: 1px solid color-mix(in srgb, var(--info) 30%, transparent);
+  border-radius: var(--r-md);
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.ai-warnings .label { font-size: var(--fs-sm); font-weight: 700; color: var(--text); }
+.ai-warnings ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin: 0;
+  padding-left: var(--sp-4);
+}
+
+/* Mes sin confirmar por la IA: el aviso más serio de la revisión */
+.gap-item.is-critical {
+  background: color-mix(in srgb, var(--warning) 22%, var(--surface));
+  border-color: color-mix(in srgb, var(--warning) 55%, transparent);
+  align-items: flex-start;
+}
+
+/* Resultado de «Probar la clave» */
+.gap-item-success { background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 30%, transparent); }
+.gap-item-error { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+.gap-item-info { background: var(--info-soft); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
+
+/* El enlace «Conseguir una clave» se ve como un botón, no como un enlace azul */
+a.btn { text-decoration: none; }
+
+/* ==========================================================================
    Impresión — el cuadrante del mes en una hoja
    ========================================================================== */
 

@@ -15,7 +15,7 @@
  *     si fueran actuales sería peor que no responder.
  */
 
-const VERSION = 'v4.0.0';
+const VERSION = 'v4.1.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 
@@ -41,9 +41,13 @@ const PRECACHE = [
   './js/core/exporter.js',
   './js/core/reminders.js',
   './js/core/holidays.js',
+  './js/core/pdf-text.js',
+  './js/core/schedule-import.js',
+  './js/core/ai-vision.js',
   './js/ui/context.js',
   './js/ui/toolkit.js',
   './js/ui/dialogs.js',
+  './js/ui/import-review.js',
   './js/ui/views/today.js',
   './js/ui/views/calendar.js',
   './js/ui/views/roster.js',

@@ -120,9 +120,9 @@ it('el index.html real se ha cargado y tiene las secciones esperadas', () => {
 
 it('el parser ha construido el árbol con los diálogos', () => {
   const dialogs = env.document.querySelectorAll('dialog');
-  is(dialogs.length, 8, 'número de diálogos declarados en index.html');
+  is(dialogs.length, 9, 'número de diálogos declarados en index.html');
   const ids = dialogs.map((d) => d.id).sort();
-  for (const expected of ['dialog-assign', 'dialog-confirm', 'dialog-day', 'dialog-day-view', 'dialog-export', 'dialog-member', 'dialog-pattern', 'dialog-type']) {
+  for (const expected of ['dialog-assign', 'dialog-confirm', 'dialog-day', 'dialog-day-view', 'dialog-export', 'dialog-import', 'dialog-member', 'dialog-pattern', 'dialog-type']) {
     ok(ids.includes(expected), `falta el diálogo #${expected}`);
   }
 });
@@ -131,6 +131,16 @@ it('los interruptores y campos clave existen', () => {
   for (const id of ['settings-notif', 'settings-theme', 'settings-region', 'assign-members', 'assign-types', 'type-colors', 'calendar-grid', 'roster-body']) {
     ok(env.document.getElementById(id), `falta #${id}`);
   }
+});
+
+it('el bloque de importación con IA existe en Ajustes', () => {
+  // BYOK: proveedor, clave, modelo, prueba y el aviso de privacidad.
+  for (const id of ['settings-ai-provider', 'settings-ai-key', 'settings-ai-model', 'settings-ai-model-reset', 'settings-ai-test', 'settings-ai-test-result', 'settings-ai-privacy', 'settings-ai-note', 'settings-ai-status']) {
+    ok(env.document.getElementById(id), `falta #${id}`);
+  }
+  const key = env.document.getElementById('settings-ai-key');
+  is(key.getAttribute('type'), 'password', 'la clave se escribe en un campo de contraseña');
+  is(key.getAttribute('autocomplete'), 'off', 'el campo de la clave no se autocompleta');
 });
 
 /* ------------------------------------------------------------------ *
@@ -1094,6 +1104,47 @@ it('el interruptor de avisos de Ajustes se puede pulsar', () => {
   ok(sw, 'existe el interruptor');
   sw.click();
   ok(true);
+});
+
+await itAsync('la clave de IA se guarda solo en las preferencias locales (nunca en el documento)', async () => {
+  const aiVision = await import('../js/core/ai-vision.js');
+  const storageMod = await import('../js/core/storage.js');
+  const ids = Object.keys(aiVision.AI_PROVIDERS);
+
+  const store = storeMod.createStore(fullDoc());
+  mountAll(store);
+  contextMod.setCurrentView('settings');
+  contextMod.renderCurrent();
+
+  // El selector se construye desde la interfaz congelada: una opción por proveedor.
+  const select = env.document.getElementById('settings-ai-provider');
+  const options = select.querySelectorAll('option');
+  is(options.length, ids.length, 'hay una opción por proveedor de AI_PROVIDERS');
+  is(options[0].value, ids[0], 'el orden es el de AI_PROVIDERS');
+
+  // El modelo arranca con el recomendado del proveedor, como valor y como marcador.
+  const provider = aiVision.AI_PROVIDERS[select.value];
+  const model = env.document.getElementById('settings-ai-model');
+  is(model.value, provider.defaultModel, 'el modelo inicial es el recomendado');
+  is(model.placeholder, provider.defaultModel, 'y también es el marcador de posición');
+
+  // La clave se guarda sola (con retardo) en las preferencias de interfaz.
+  const key = env.document.getElementById('settings-ai-key');
+  key.value = 'clave-de-prueba-no-real';
+  key.dispatchEvent(new env.DOMEvent('input', { bubbles: true }));
+  await sleep(650);
+  is(storageMod.loadUI().ai.apiKey, 'clave-de-prueba-no-real', 'la clave queda en las preferencias locales');
+  is(storageMod.loadUI().ai.provider, select.value, 'y el proveedor junto a ella');
+
+  // ...y NUNCA en el documento, que es lo que se sincroniza con la nube.
+  ok(!JSON.stringify(store.doc).includes('clave-de-prueba-no-real'),
+    'la clave no entra en el documento sincronizado');
+
+  // El botón devuelve al modelo recomendado.
+  model.value = 'modelo-que-no-existe';
+  env.document.getElementById('settings-ai-model-reset').click();
+  is(model.value, provider.defaultModel, 'el botón vuelve al modelo recomendado');
+  is(storageMod.loadUI().ai.model, provider.defaultModel, 'y lo deja guardado');
 });
 
 /* ==================================================================== *

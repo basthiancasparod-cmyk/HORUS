@@ -67,51 +67,14 @@ comment on function public.horus_touch_updated_at() is
   'HORUS: trigger BEFORE UPDATE que reescribe updated_at = now().';
 
 -- ---------------------------------------------------------------------
--- 0.2) Helpers de equipo.
---      SECURITY DEFINER + search_path fijo:
---        - rompen la recursión infinita de RLS (una política de
---          horus_team_members que lea horus_team_members volvería a
---          evaluar la misma política → error 42P17 / recursión).
---        - al ejecutarse como el dueño de la función, no se les aplica la
---          RLS de las tablas que consultan.
---      El parámetro p_user es auth.uid() por defecto.
+-- 0.2) Helpers de equipo: están en el apartado 2.3, NO aquí.
+--      Motivo (error 42P01 «relation public.horus_team_members does not
+--      exist»): son funciones `language sql`, y Postgres analiza y planifica
+--      su cuerpo al crearlas (check_function_bodies está activo por
+--      defecto). Como consultan horus_teams y horus_team_members, tienen que
+--      crearse DESPUÉS de esas tablas. Definirlas aquí rompía el script
+--      entero en la primera ejecución.
 -- ---------------------------------------------------------------------
-create or replace function public.horus_is_team_member(p_team_id uuid, p_user uuid default auth.uid())
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1
-    from public.horus_team_members tm
-    where tm.team_id = p_team_id
-      and tm.user_id = p_user
-      and tm.deleted = false
-  );
-$$;
-
-comment on function public.horus_is_team_member(uuid, uuid) is
-  'HORUS: ¿p_user pertenece al equipo p_team_id? SECURITY DEFINER para evitar recursión en RLS.';
-
-create or replace function public.horus_is_team_owner(p_team_id uuid, p_user uuid default auth.uid())
-returns boolean
-language sql
-stable
-security definer
-set search_path = public
-as $$
-  select exists (
-    select 1
-    from public.horus_teams t
-    where t.id = p_team_id
-      and t.owner_id = p_user
-  );
-$$;
-
-comment on function public.horus_is_team_owner(uuid, uuid) is
-  'HORUS: ¿p_user es el dueño del equipo p_team_id? SECURITY DEFINER para evitar recursión en RLS.';
 
 -- =====================================================================
 -- 1) TABLAS DEL USUARIO (una fila por entidad del documento)
@@ -282,6 +245,57 @@ create table if not exists public.horus_team_members (
   constraint horus_team_members_pkey primary key (team_id, user_id),
   constraint horus_team_members_role_chk check (role in ('owner', 'admin', 'member', 'viewer'))
 );
+
+-- ---------------------------------------------------------------------
+-- 2.3) Helpers de equipo.
+--      SECURITY DEFINER + search_path fijo:
+--        - rompen la recursión infinita de RLS (una política de
+--          horus_team_members que lea horus_team_members volvería a
+--          evaluar la misma política → error 42P17 / recursión).
+--        - al ejecutarse como el dueño de la función, no se les aplica la
+--          RLS de las tablas que consultan.
+--      El parámetro p_user es auth.uid() por defecto.
+--
+--      VAN AQUÍ, y no al principio del archivo, porque son funciones
+--      `language sql`: Postgres planifica su cuerpo al crearlas, así que
+--      horus_teams y horus_team_members tienen que existir ya.
+-- ---------------------------------------------------------------------
+create or replace function public.horus_is_team_member(p_team_id uuid, p_user uuid default auth.uid())
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.horus_team_members tm
+    where tm.team_id = p_team_id
+      and tm.user_id = p_user
+      and tm.deleted = false
+  );
+$$;
+
+comment on function public.horus_is_team_member(uuid, uuid) is
+  'HORUS: ¿p_user pertenece al equipo p_team_id? SECURITY DEFINER para evitar recursión en RLS.';
+
+create or replace function public.horus_is_team_owner(p_team_id uuid, p_user uuid default auth.uid())
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.horus_teams t
+    where t.id = p_team_id
+      and t.owner_id = p_user
+  );
+$$;
+
+comment on function public.horus_is_team_owner(uuid, uuid) is
+  'HORUS: ¿p_user es el dueño del equipo p_team_id? SECURITY DEFINER para evitar recursión en RLS.';
 
 -- =====================================================================
 -- 3) ÍNDICES
@@ -657,7 +671,6 @@ $$;
 
 commit;
 
--- =====================================================================
 -- =====================================================================
 --  9) COMPATIBILIDAD CON LA APP ANTIGUA  ·  public.user_data / profiles
 -- ---------------------------------------------------------------------

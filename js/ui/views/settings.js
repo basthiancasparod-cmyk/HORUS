@@ -12,6 +12,7 @@ import {
   todayKey, monthKeyOf, monthDays, formatShortDate, blockMinutes, formatBlocks,
 } from '../../core/date.js';
 import * as storage from '../../core/storage.js';
+import { AI_PROVIDERS } from '../../core/ai-vision.js';
 import * as auth from '../../core/auth.js';
 import { cloudConfig, setCloudConfig, hasOwnCloudConfig, APP, DEFAULT_CLOUD } from '../../config.js';
 import * as exporter from '../../core/exporter.js';
@@ -73,6 +74,16 @@ export function mount(ctx) {
     theme: byId('settings-theme'),
     weeknumbers: byId('settings-weeknumbers'),
     compact: byId('settings-compact'),
+    aiProvider: byId('settings-ai-provider'),
+    aiNote: byId('settings-ai-note'),
+    aiKey: byId('settings-ai-key'),
+    aiStatus: byId('settings-ai-status'),
+    aiModel: byId('settings-ai-model'),
+    aiModelHint: byId('settings-ai-model-hint'),
+    aiModelReset: byId('settings-ai-model-reset'),
+    aiTest: byId('settings-ai-test'),
+    aiKeyLink: byId('settings-ai-keylink'),
+    aiTestResult: byId('settings-ai-test-result'),
     account: byId('settings-account'),
     cloud: byId('settings-cloud'),
     storage: byId('settings-storage'),
@@ -364,6 +375,57 @@ function wireSettings() {
     refs.compact = control;
   });
 
+  /* ---------- Importar con IA (BYOK) ---------- */
+
+  once('ai', () => {
+    // El selector se construye desde la interfaz congelada de ai-vision.js:
+    // aquí no se escribe a mano ningún proveedor.
+    for (const provider of Object.values(AI_PROVIDERS)) {
+      refs.aiProvider.appendChild(el('option', { value: provider.id }, provider.label));
+    }
+
+    refs.aiProvider.addEventListener('change', () => {
+      // Al cambiar de proveedor el modelo guardado ya no sirve: vuelve al suyo.
+      saveAiConfig({ provider: refs.aiProvider.value, model: '' });
+      paintAi();
+      clear(refs.aiTestResult);
+      notify.info(`Proveedor: ${AI_PROVIDERS[refs.aiProvider.value]?.label || refs.aiProvider.value}`);
+    });
+
+    // La clave se guarda sola, sin botón, pero solo en las preferencias locales.
+    // Mientras el usuario escribe no se pisa el campo (aunque la vista se
+    // repinte por un cambio del store), porque todavía no se ha guardado.
+    const saveKey = debounce(() => {
+      saveAiConfig({ provider: refs.aiProvider.value, apiKey: refs.aiKey.value.trim() });
+      aiTouched.key = false;
+      paintAiStatus();
+    }, 500);
+    refs.aiKey.addEventListener('input', () => {
+      aiTouched.key = true;
+      saveKey();
+    });
+
+    const saveModel = debounce(() => {
+      saveAiConfig({ provider: refs.aiProvider.value, model: refs.aiModel.value.trim() });
+      aiTouched.model = false;
+    }, 500);
+    refs.aiModel.addEventListener('input', () => {
+      aiTouched.model = true;
+      saveModel();
+    });
+
+    refs.aiModelReset.addEventListener('click', () => {
+      const provider = AI_PROVIDERS[refs.aiProvider.value];
+      if (!provider) return;
+      refs.aiModel.value = provider.defaultModel;
+      aiTouched.model = false;
+      saveAiConfig({ provider: provider.id, model: provider.defaultModel });
+      notify.info(`Modelo: ${provider.defaultModel}`);
+    });
+
+    refs.aiTest.addEventListener('click', testAiKey);
+  });
+
   /* ---------- Datos ---------- */
 
   once('backup', () => {
@@ -418,6 +480,12 @@ function wireSettings() {
       // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
       });
     });
+  });
+
+  once('importPdf', () => {
+    const button = byId('settings-import-pdf');
+    if (!button) return;
+    button.addEventListener('click', () => live.openImport());
   });
 
   once('importCsv', () => {
@@ -491,6 +559,181 @@ function wireSettings() {
   });
 }
 
+
+/* ------------------------------------------------------------------ *
+ * IA de visión: proveedor, clave y modelo (BYOK)
+ *
+ * La clave vive SOLO en las preferencias locales de interfaz
+ * (`storage.loadUI`), bajo la clave `ai`, junto al proveedor y el modelo.
+ * NO entra en el documento: el documento se sincroniza con la nube y la
+ * clave no puede salir de este dispositivo.
+ * ------------------------------------------------------------------ */
+
+/** Clave propia dentro de las preferencias de interfaz (no se mezcla con el resto). */
+const AI_PREF = 'ai';
+
+/**
+ * Campos de IA que el usuario está editando ahora mismo. Mientras estén
+ * marcados no se sincronizan desde lo guardado: si la vista se repinta antes
+ * de que el guardado con retardo se complete, se perdería lo escrito.
+ */
+const aiTouched = { key: false, model: false };
+
+/**
+ * PNG de 1×1 embebido: es la llamada de verificación más barata que permite el
+ * contrato congelado de ai-vision.js (no hay ninguna función «ping»).
+ */
+const TINY_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNIm3kGAAM0AcyDMO/AAAAAAElFTkSuQmCC';
+
+/** Lee la configuración de IA saneada contra la interfaz congelada. */
+function aiConfig() {
+  const stored = storage.loadUI()?.[AI_PREF];
+  const data = stored && typeof stored === 'object' ? stored : {};
+  const ids = Object.keys(AI_PROVIDERS);
+  const provider = ids.includes(data.provider) ? data.provider : (ids[0] || '');
+  const providerDef = AI_PROVIDERS[provider] || null;
+  const model = String(data.model || '').trim() || providerDef?.defaultModel || '';
+  return { provider, providerDef, apiKey: String(data.apiKey || ''), model };
+}
+
+/** Guarda la configuración de IA sin tocar ninguna otra preferencia de interfaz. */
+function saveAiConfig(patch) {
+  const stored = storage.loadUI()?.[AI_PREF];
+  const current = stored && typeof stored === 'object' ? stored : {};
+  storage.saveUI({ [AI_PREF]: { ...current, ...patch } });
+}
+
+/**
+ * Comprobación real de la clave: una interpretación con una imagen de 1×1.
+ * Sin clave no se llama a ningún sitio (no hay servicio por defecto).
+ */
+async function testAiKey() {
+  const config = aiConfig();
+  if (!config.providerDef) {
+    setAiTestResult('error', 'No hay ningún proveedor seleccionado.');
+    return;
+  }
+  if (!config.apiKey) {
+    setAiTestResult('warning', 'Escribe primero tu clave y vuelve a probar.');
+    notify.warning('Falta la clave del proveedor');
+    return;
+  }
+
+  const button = refs.aiTest;
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Probando…';
+  setAiTestResult('info', `Comprobando la clave con ${config.providerDef.label}…`);
+
+  try {
+    const mod = await import('../../core/ai-vision.js');
+    const fetchImpl = typeof fetch === 'function' ? (input, init) => fetch(input, init) : undefined;
+    const result = await mod.interpretSchedule({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      model: config.model,
+      file: { data: TINY_PNG_BASE64, mimeType: 'image/png', name: 'prueba.png' },
+      fetchImpl,
+    });
+    paintAiVerdict(result, config);
+  } catch (err) {
+    // El contrato dice que nunca lanza; si aun así pasa, se explica sin la clave.
+    setAiTestResult('error', `La comprobación ha fallado: ${err.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = label;
+  }
+}
+
+/**
+ * Traduce el resultado de la prueba a un mensaje claro para el usuario.
+ *
+ * El PNG de 1×1 solo sirve para comprobar la AUTENTICACIÓN: el proveedor puede
+ * responder «esto no es un cuadrante» con la clave perfectamente válida. Por eso
+ * los fallos de contenido cuentan como «la clave se ha aceptado» y solo los de
+ * transporte, clave, modelo o cuota se cuentan como fallo de la prueba.
+ */
+function paintAiVerdict(result, config) {
+  const name = config.providerDef?.label || config.provider;
+
+  if (result?.ok) {
+    setAiTestResult('success', `La clave funciona: ${name} ha respondido con el modelo ${config.model}.`);
+    notify.success('La clave funciona');
+    return;
+  }
+
+  const reason = String(result?.reason || 'motivo desconocido');
+  if (/no está implementada|todavía no/i.test(reason)) {
+    setAiTestResult('warning', `${name} todavía no está disponible en esta versión: ${reason}`);
+  } else if (/clave|401|403|permiso|autentic/i.test(reason)) {
+    setAiTestResult('error', `La clave no vale o no tiene permiso para ese modelo: ${reason}`);
+    notify.error('La clave no vale');
+  } else if (/satur|503|429|demanda|ocupad|no responde|reinténtalo/i.test(reason)) {
+    setAiTestResult('warning', `El servicio está saturado ahora mismo: ${reason} Prueba dentro de unos minutos.`);
+    notify.warning('El servicio está saturado');
+  } else if (/modelo|404|no disponible/i.test(reason)) {
+    setAiTestResult('warning', `Ese modelo no está disponible en tu cuenta (${config.model}): ${reason}`);
+  } else if (/conexi|sin red|internet/i.test(reason)) {
+    setAiTestResult('error', `No se ha podido llegar al servicio: ${reason}`);
+  } else if (/proveedor/i.test(reason)) {
+    setAiTestResult('error', `Falta elegir proveedor: ${reason}`);
+  } else if (/rechazado la petición|error \d{3}/i.test(reason)) {
+    setAiTestResult('warning', `El proveedor ha respondido con un error, así que la prueba no es concluyente: ${reason}`);
+  } else {
+    // El proveedor ha contestado: la clave se ha aceptado. Lo que no vale es la
+    // imagen de prueba, y eso se dice tal cual.
+    setAiTestResult('success', `La clave parece correcta: ${name} ha respondido. La imagen de prueba es de un píxel, así que no se puede leer como cuadrante: ${reason}`);
+    notify.success('La clave se ha aceptado');
+  }
+}
+
+/** Mensaje de resultado de la prueba, sin `innerHTML` y con icono de la casa. */
+function setAiTestResult(kind, message) {
+  const box = refs.aiTestResult;
+  if (!box) return;
+  clear(box);
+  const iconName = kind === 'success' ? 'check' : kind === 'error' ? 'alert' : 'info';
+  box.appendChild(el('div', { class: `gap-item gap-item-${kind}` }, [
+    icon(iconName, 16),
+    el('span', { class: 'grow' }, message),
+  ]));
+}
+
+/** Sincroniza el bloque de IA con lo guardado. */
+function paintAi() {
+  const config = aiConfig();
+  const provider = config.providerDef;
+
+  if (refs.aiProvider.value !== config.provider) refs.aiProvider.value = config.provider;
+  refs.aiNote.textContent = provider?.note
+    || 'No hay ningún proveedor disponible en esta versión.';
+
+  if (provider?.keyUrl) {
+    refs.aiKeyLink.href = provider.keyUrl;
+    refs.aiKeyLink.hidden = false;
+  } else {
+    refs.aiKeyLink.hidden = true;
+  }
+
+  // Nunca se pisa lo que el usuario está escribiendo en ese momento.
+  if (!aiTouched.key && document.activeElement !== refs.aiKey) refs.aiKey.value = config.apiKey;
+  if (!aiTouched.model && document.activeElement !== refs.aiModel) refs.aiModel.value = config.model;
+
+  refs.aiModel.placeholder = provider?.defaultModel || 'modelo';
+  refs.aiModelHint.textContent = provider
+    ? `Recomendado: ${provider.defaultModel}. Si está saturado, la app prueba los modelos de reserva que ya conoce.`
+    : '';
+
+  paintAiStatus();
+}
+
+function paintAiStatus() {
+  const config = aiConfig();
+  const name = config.providerDef?.label;
+  refs.aiStatus.textContent = config.apiKey
+    ? `Clave guardada solo en este dispositivo${name ? ` (${name})` : ''}. Nunca se sube a la nube.`
+    : 'Todavía no hay ninguna clave guardada en este dispositivo.';
+}
 
 /** Pregunta si combinar la copia con lo actual o reemplazarlo. */
 function askMergeOrReplace({ title, context }) {
@@ -850,6 +1093,9 @@ function render() {
   refs.theme.value = storage.storage.get('horus.theme') || settings.theme || 'dark';
   setSwitch(refs.weeknumbers, settings.showWeekNumbers !== false);
   setSwitch(refs.compact, !!settings.compactMode);
+
+  /* Importar con IA (clave local, nunca en el documento) */
+  paintAi();
 
   /* Cuenta y datos */
   paintAccount(ctx);

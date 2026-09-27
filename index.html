@@ -449,6 +449,7 @@
 
         <div id="roster-actions" class="card">
           <div class="row wrap" style="gap:var(--sp-2)">
+            <button type="button" class="btn btn-sm btn-primary" id="roster-import">Importar del PDF</button>
             <button type="button" class="btn btn-sm" id="roster-rotate">Rotar turnos</button>
             <button type="button" class="btn btn-sm" id="roster-pattern">Aplicar rotación</button>
             <button type="button" class="btn btn-sm" id="roster-copyweek">Copiar semana</button>
@@ -715,6 +716,59 @@
           <div class="card" id="settings-cloud"></div>
         </div>
 
+        <!-- Importar con IA (fotos, capturas y PDF escaneados) -->
+        <div class="settings-group">
+          <h3 class="section-label">Importar con IA (fotos y capturas)</h3>
+          <p class="field-hint" id="settings-ai-intro">
+            Los PDF con texto se siguen leyendo en tu dispositivo, sin salir de él. Para una foto
+            del cuadrante o un PDF escaneado hace falta un modelo con visión: elige proveedor y
+            pega tu propia clave.
+          </p>
+
+          <div class="setting-row">
+            <div>
+              <div class="label">Proveedor</div>
+              <div class="sub" id="settings-ai-note">—</div>
+            </div>
+            <div class="control">
+              <select class="select" id="settings-ai-provider" style="width:auto" aria-label="Proveedor de IA para leer fotos del cuadrante"></select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="settings-ai-key">Clave del proveedor</label>
+            <input class="input" type="password" id="settings-ai-key" autocomplete="off" spellcheck="false"
+                   placeholder="Pega aquí tu clave" aria-describedby="settings-ai-status settings-ai-privacy" />
+            <p class="field-hint" id="settings-ai-status">Todavía no hay ninguna clave guardada en este dispositivo.</p>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="settings-ai-model">Modelo</label>
+            <div class="row" style="gap:var(--sp-2)">
+              <input class="input grow" type="text" id="settings-ai-model" autocomplete="off" spellcheck="false" />
+              <button type="button" class="btn btn-sm" id="settings-ai-model-reset">Usar el recomendado</button>
+            </div>
+            <p class="field-hint" id="settings-ai-model-hint">—</p>
+          </div>
+
+          <div class="row wrap" style="gap:var(--sp-2)">
+            <button type="button" class="btn btn-sm btn-primary" id="settings-ai-test">Probar la clave</button>
+            <a class="btn btn-sm" id="settings-ai-keylink" href="https://aistudio.google.com/apikey"
+               target="_blank" rel="noopener noreferrer">Conseguir una clave</a>
+          </div>
+          <div id="settings-ai-test-result" role="status" aria-live="polite"></div>
+
+          <div class="ai-notice" id="settings-ai-privacy">
+            <div class="label">Antes de usar una foto, ten esto claro</div>
+            <ul>
+              <li>Una foto del cuadrante lleva los <strong>nombres de tus compañeros</strong> y se envía al proveedor que elijas de esta lista.</li>
+              <li>En la <strong>capa gratuita de Gemini</strong>, Google puede usar esas peticiones para mejorar sus productos.</li>
+              <li>Tu clave se guarda <strong>solo en este dispositivo</strong> y <strong>nunca se sube a la nube</strong> ni se sincroniza.</li>
+              <li>La importación con IA está <strong>apagada</strong> hasta que pongas una clave: no hay ningún servicio por defecto.</li>
+            </ul>
+          </div>
+        </div>
+
         <!-- Datos -->
         <div class="settings-group">
           <h3 class="section-label">Datos</h3>
@@ -725,6 +779,7 @@
           <button type="button" class="btn btn-block" id="settings-backup">Descargar copia de seguridad (JSON)</button>
           <button type="button" class="btn btn-block" id="settings-restore">Restaurar desde un archivo</button>
           <button type="button" class="btn btn-block" id="settings-backups">Recuperar una versión anterior</button>
+          <button type="button" class="btn btn-block btn-primary" id="settings-import-pdf">Importar el cuadrante (PDF, foto o captura)</button>
           <button type="button" class="btn btn-block" id="settings-import-csv">Importar cuadrante desde CSV</button>
           <button type="button" class="btn btn-block" id="settings-export-ical">Exportar a calendario (.ics)</button>
         </div>
@@ -1185,6 +1240,31 @@
         <button type="button" class="btn" id="dayview-copy">Copiar</button>
         <span class="grow"></span>
         <button type="button" class="btn btn-primary" id="dayview-edit">Editar el día</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: importar el cuadrante desde un PDF
+       ================================================================== -->
+  <dialog class="dialog" id="dialog-import" aria-labelledby="import-title">
+    <div class="dialog-panel">
+      <header class="dialog-header">
+        <div>
+          <h2 id="import-title">Importar el cuadrante</h2>
+          <div class="sub" id="import-sub">Desde el PDF que reparte la empresa</div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="dialog-body" id="import-body"></div>
+
+      <footer class="dialog-footer">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close id="import-cancel">Cancelar</button>
+        <button type="button" class="btn btn-primary" id="import-commit" hidden>Importar al cuadrante</button>
       </footer>
     </div>
   </dialog>

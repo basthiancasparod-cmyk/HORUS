@@ -31,6 +31,7 @@ import {
 } from './ui/context.js';
 import { notify, openDialog, closeDialog, confirmAction, switchControl, emptyState } from './ui/toolkit.js';
 import { wireAllDialogs, openAssignDialog, openDayEditor, openMemberEditor, openTypeEditor, openExportDialog, fillRegionSelect, applyHolidays } from './ui/dialogs.js';
+import { openImportDialog } from './ui/import-review.js';
 
 import { mount as mountToday } from './ui/views/today.js';
 import { mount as mountCalendar } from './ui/views/calendar.js';
@@ -371,6 +372,8 @@ const context = {
   openType: (id, opts) => openTypeEditor(context, id, opts),
   openMember: (id, opts) => openMemberEditor(context, id, opts),
   openExport: (opts) => openExportDialog(context, opts),
+  /** Importación de un cuadrante desde el PDF de la empresa. */
+  openImport: (preset) => openImportDialog(context, preset),
 
   isLocalMode: () => localMode,
   region: () => storage.storage.get(REGION_KEY) || store?.doc?.settings?.region || 'ES',
