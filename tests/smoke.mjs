@@ -810,6 +810,35 @@ await itAsync('detecta dos fichas con el mismo nombre y las une sin pisar turnos
   is(suyos.some((e) => e.date === '2025-06-03'), true, 'y se ha traído el turno de la otra');
 });
 
+await itAsync('quita los turnos duplicados de una persona en un día', async () => {
+  env.reset();
+  const doc = model.bootstrapDocument({ name: 'Ana', coworkers: [] });
+  doc.settings.firstRun = false;
+  const store = storeMod.createStore(doc);
+  const ctx = mountAll(store);
+  const yo = store.doc.members[0];
+  const M = store.doc.shiftTypes.find((s) => s.code === 'M');
+  const T = store.doc.shiftTypes.find((s) => s.code === 'T');
+
+  store.actions.setEntry({ memberId: yo.id, date: '2025-06-02', typeId: M.id });
+  // Segunda entrada del mismo día a la brava, como puede llegar de otro
+  // dispositivo: el Cuadrante enseña una y el editor del día, las dos.
+  store.apply((d) => {
+    d.entries.push({ ...d.entries[0], id: 'dup-1', typeId: T.id });
+  });
+  is(model.findDuplicates(store.doc).length, 1, 'hay un día con dos turnos');
+
+  const enCurso = teamView.quitarDuplicados(ctx, store.doc, model.findDuplicates(store.doc));
+  await sleep(10);
+  env.document.getElementById('confirm-ok').click();
+  await enCurso;
+
+  const suyos = store.doc.entries.filter((e) => e.memberId === yo.id && e.date === '2025-06-02');
+  is(suyos.length, 1, 'queda un solo turno ese día');
+  is(suyos[0].typeId, M.id, 'y se conserva el que tenía tipo');
+  is(model.findDuplicates(store.doc).length, 0, 'ya no hay duplicados');
+});
+
 it('el editor de día marca y desmarca festivo', () => {
   const store = storeMod.createStore(fullDoc());
   const ctx = mountAll(store);

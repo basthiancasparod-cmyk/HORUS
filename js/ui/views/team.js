@@ -19,6 +19,7 @@ import * as dialogs from '../dialogs.js';
 import {
   analyzeMonth, findConflicts, summarizeMonth, weeklyBreakdown,
 } from '../../core/coverage.js';
+import { findDuplicates } from '../../core/model.js';
 import {
   MIN_PER_DAY, formatDuration, formatHours, formatShortDate, monthKeyOf, todayKey,
 } from '../../core/date.js';
@@ -557,12 +558,87 @@ export async function unirFichas(ctx, doc, grupo) {
   );
 }
 
+/* ------------------------------------------------------------------ *
+ * Turnos duplicados: dos entradas para la misma persona el mismo día
+ * ------------------------------------------------------------------ */
+
+/**
+ * Deja un solo turno por persona y día.
+ *
+ * Se conserva la entrada que tiene tipo de turno (y si las dos lo tienen, la
+ * primera, que es la que el Cuadrante está enseñando). Como no hay acción para
+ * borrar una entrada por su id, se borran todas las de esa persona y ese día y se
+ * vuelve a poner la elegida: el resultado es exactamente un turno.
+ */
+export async function quitarDuplicados(ctx, doc, duplicados) {
+  const { actions } = ctx;
+
+  const porDia = new Map();
+  for (const [a, b] of duplicados) {
+    const k = `${a.memberId}|${a.date}`;
+    if (!porDia.has(k)) porDia.set(k, [a, b]);
+    else porDia.get(k).push(b);
+  }
+
+  const nombre = (id) => doc.members.find((m) => m.id === id)?.name || 'alguien';
+  const ok = await confirmAction({
+    title: `Quitar turnos duplicados`,
+    message: `Hay ${plural(porDia.size, 'día', 'días')} con dos turnos de la misma persona. `
+      + 'Se dejará uno por día: el que tiene tipo de turno asignado. '
+      + `Por ejemplo, ${formatShortDate(duplicados[0][0].date)} · ${nombre(duplicados[0][0].memberId)}.`,
+    confirmLabel: 'Dejar uno',
+  });
+  if (!ok) return;
+
+  let quitados = 0;
+  ctx.batch('quitar turnos duplicados', () => {
+    for (const entradas of porDia.values()) {
+      const keep = entradas.find((e) => e.typeId) || entradas[0];
+      const sobran = entradas.length - 1;
+      if (sobran <= 0) continue;
+      actions.removeEntries({ memberId: keep.memberId, date: keep.date });
+      actions.setEntry({
+        memberId: keep.memberId,
+        date: keep.date,
+        typeId: keep.typeId ?? null,
+        blocks: keep.blocks || null,
+        notes: keep.notes || undefined,
+      });
+      quitados += sobran;
+    }
+  });
+
+  notify.success(`${quitados} turno(s) duplicado(s) quitados`, {
+    duration: 8000,
+    action: { label: 'Deshacer', onClick: () => ctx.undo() },
+  });
+}
+
 function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from, to }) {
   if (!refs.alerts || !refs.alertsSection) return;
   clear(refs.alerts);
 
   /** @type {{text:string, detail?:string, serious?:boolean, action?:{label:string,onClick:Function}}[]} */
   const alerts = [];
+
+  /* 0-bis) TURNOS DUPLICADOS: dos entradas para la misma persona el mismo dia.
+     Este es el caso mas traicionero de todos, porque el Cuadrante busca UN turno
+     por persona y dia (y por eso se ve bien) mientras el editor del dia los lista
+     TODOS (y por eso el companero sale dos veces). Los dos miran lo mismo; solo el
+     segundo ensena que hay dos. */
+  const duplicados = findDuplicates(doc);
+  if (duplicados.length) {
+    alerts.push({
+      text: `Hay ${plural(duplicados.length, 'día', 'días')} con dos turnos para la misma persona`,
+      detail: `Por ejemplo, ${formatShortDate(duplicados[0][0].date)} · `
+        + `${doc.members.find((m) => m.id === duplicados[0][0].memberId)?.name || 'alguien'}. `
+        + 'En el Cuadrante no se nota (enseña uno), pero en el editor del día la persona sale repetida. '
+        + 'Se puede dejar un solo turno por día y persona.',
+      serious: true,
+      action: { label: 'Quitar duplicados', onClick: () => quitarDuplicados(ctx, doc, duplicados) },
+    });
+  }
+
 
   /* 0) FICHAS REPETIDAS.
      Al importar el cuadrante en dos dispositivos, o al importarlo dos veces (por
