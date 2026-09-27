@@ -720,7 +720,10 @@ function describeDaySubtitle(doc, date) {
   const analysis = analyzeDate(doc, date);
   const parts = [];
   if (analysis.isHoliday) parts.push(doc.dayMeta?.[date]?.label || 'Festivo');
-  parts.push(`${analysis.headsOnShift} turno${analysis.headsOnShift === 1 ? '' : 's'}`);
+  // Se cuentan los turnos que EMPIEZAN este día. Las continuaciones de ayer no son
+  // turnos de hoy: si se contaran, el mismo turno de madrugada sumaría dos veces.
+  const empiezanHoy = analysis.projections.filter((p) => p.entry?.date === date).length;
+  parts.push(`${empiezanHoy} turno${empiezanHoy === 1 ? '' : 's'}`);
   if (analysis.gapMin > 0) parts.push(`${formatDuration(analysis.gapMin)} sin cubrir`);
   else if (analysis.headsOnShift) parts.push('cobertura completa');
   return parts.join(' · ');
@@ -752,10 +755,32 @@ function renderDayEditor(ctx) {
     return;
   }
 
-  const sorted = [...analysis.projections].sort((a, b) => (a.isWork === b.isWork ? 0 : a.isWork ? -1 : 1));
-  for (const projection of sorted) {
+  /* UN TURNO QUE ACABA DE MADRUGADA NO ES UN TURNO MÁS DE ESE DÍA.
+     `analysis.projections` trae dos cosas distintas mezcladas: los turnos que
+     EMPIEZAN este día y los de ayer que cruzan la medianoche y siguen hasta esta
+     madrugada. Pintarlos juntos hacía que el compañero saliera DOS veces con el
+     mismo turno (el suyo de hoy y el de ayer proyectado), que parece un duplicado
+     y no lo es. Se separan: primero los de hoy, y las continuaciones aparte, bien
+     dicho, sin contarlas como turnos del día. La cobertura sí las sigue usando:
+     entre las 00:00 y la hora de fin hay alguien trabajando, y eso no cambia. */
+  const deHoy = analysis.projections.filter((p) => p.entry?.date === date);
+  const deAyer = analysis.projections.filter((p) => p.entry?.date && p.entry.date < date);
+  const ordenar = (lista) => [...lista].sort((a, b) => (a.isWork === b.isWork ? 0 : a.isWork ? -1 : 1));
+
+  for (const projection of ordenar(deHoy)) {
     box.appendChild(renderEntryRow(ctx, projection, () => renderDayEditor(ctx)));
   }
+
+  if (deAyer.length) {
+    box.appendChild(el('div', { class: 'section-label', style: { marginTop: 'var(--sp-4)' } },
+      `Continúan de ayer (acaban esta madrugada) · ${deAyer.length}`));
+    box.appendChild(el('p', { class: 'field-hint', style: { marginBottom: 'var(--sp-2)' } },
+      'Son turnos de ayer que terminan hoy de madrugada. No cuentan como turnos de este día.'));
+    for (const projection of ordenar(deAyer)) {
+      box.appendChild(renderEntryRow(ctx, projection, () => renderDayEditor(ctx)));
+    }
+  }
+
   void actions;
 }
 
