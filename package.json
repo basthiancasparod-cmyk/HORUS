@@ -1,0 +1,24 @@
+{
+  "name": "horus",
+  "version": "4.0.0",
+  "private": true,
+  "description": "HORUS — calendario de turnos compartido por equipo (PWA, sin build step)",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run.js && node tests/io.js && node tests/scenario.js && node tests/smoke.mjs && node tests/app.mjs",
+    "test:core": "node tests/run.js",
+    "test:io": "node tests/io.js",
+    "test:scenario": "node tests/scenario.js",
+    "test:ui": "node tests/smoke.mjs",
+    "test:app": "node tests/app.mjs",
+    "check": "node tools/check.mjs",
+    "verify": "npm run check && npm test",
+    "icons": "node tools/make-icons.mjs",
+    "serve": "node tools/serve.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": ["turnos", "calendario", "equipo", "pwa"],
+  "license": "MIT"
+}

@@ -1,250 +1,1204 @@
 <!DOCTYPE html>
-<html lang="es" data-theme="dark">
+<html lang="es" data-theme="dark" data-density="comfortable">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1" />
-<title>HORUS</title>
-<meta name="theme-color" content="#0D0F13" />
-<meta name="color-scheme" content="dark light" />
-<link rel="manifest" href="manifest.json" />
-<link rel="icon" href="icon-192.png" />
-<link rel="apple-touch-icon" href="icon-192.png" />
-<meta name="mobile-web-app-capable" content="yes" />
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="styles.css" />
-<link rel="stylesheet" href="auth.css" />
-<link rel="stylesheet" href="onboarding.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>HORUS — Cuadrante de turnos del equipo</title>
+
+  <meta name="description" content="Cuadrante de turnos compartido: quién trabaja hoy, cobertura del equipo, horas y avisos. Funciona sin conexión." />
+  <meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)" />
+  <meta name="theme-color" content="#f4f6fa" media="(prefers-color-scheme: light)" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="HORUS" />
+  <meta name="format-detection" content="telephone=no" />
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/favicon-32.png" sizes="32x32" />
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400..800&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/app.css" />
 </head>
+
 <body>
+  <a class="skip-link" href="#main">Saltar al contenido</a>
 
-  <!-- AUTH -->
-  <section class="screen active" id="s-auth">
-    <div class="auth-container">
-      <div class="auth-logo">
-        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-          <circle cx="24" cy="24" r="22" stroke="currentColor" stroke-width="2.5" opacity="0.3"/>
-          <circle cx="24" cy="24" r="14" stroke="currentColor" stroke-width="2"/>
-          <circle cx="24" cy="16" r="4" fill="var(--accent)"/>
-          <line x1="24" y1="20" x2="24" y2="30" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round"/>
-          <line x1="19" y1="27" x2="29" y2="27" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
-        </svg>
+  <!-- ==================================================================
+       ARRANQUE (mientras se carga el estado)
+       ================================================================== -->
+  <div id="boot" class="center" style="min-height:100dvh">
+    <div class="col center" style="gap:var(--sp-4)">
+      <div class="skeleton" style="width:56px;height:56px;border-radius:var(--r-lg)"></div>
+      <p class="t-sm t-muted">Cargando HORUS…</p>
+    </div>
+  </div>
+
+  <!-- ==================================================================
+       PANTALLA DE ACCESO
+       ================================================================== -->
+  <section id="auth-screen" class="auth-screen" hidden>
+    <div class="auth-panel">
+      <div class="auth-brand">
+        <span class="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="9.5" opacity=".35" />
+            <circle cx="12" cy="12" r="5.5" />
+            <circle cx="12" cy="8" r="1.7" fill="currentColor" stroke="none" />
+            <path d="M12 9.7v5.1" />
+            <path d="M9.6 12.4h4.8" opacity=".6" />
+          </svg>
+        </span>
         <h1>HORUS</h1>
-        <p class="auth-tagline">Tu gestor de turnos inteligente</p>
+        <p>El cuadrante de turnos de tu equipo.<br />Sabe quién trabaja, cuándo y quién falta.</p>
       </div>
-      <div class="auth-tabs">
-        <button class="auth-tab active" data-tab="login" aria-label="Iniciar sesión">Iniciar sesión</button>
-        <button class="auth-tab" data-tab="register" aria-label="Crear cuenta">Crear cuenta</button>
+
+      <div class="auth-card">
+        <div class="tabs" role="tablist" aria-label="Acceso o registro" style="margin-bottom:var(--sp-4)">
+          <button type="button" role="tab" id="tab-signin" aria-selected="true" aria-controls="pane-signin" data-auth-tab="signin">Iniciar sesión</button>
+          <button type="button" role="tab" id="tab-signup" aria-selected="false" aria-controls="pane-signup" data-auth-tab="signup">Crear cuenta</button>
+        </div>
+
+        <form id="form-auth" novalidate>
+          <div class="field">
+            <label class="field-label" for="auth-email">Correo electrónico</label>
+            <input class="input" type="email" id="auth-email" name="email" autocomplete="email"
+                   inputmode="email" placeholder="tu@trabajo.com" required />
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="auth-password">Contraseña</label>
+            <input class="input" type="password" id="auth-password" name="password"
+                   autocomplete="current-password" placeholder="Mínimo 6 caracteres" required />
+            <p class="field-hint" id="auth-password-hint" hidden>Para crear una cuenta usa al menos 8 caracteres.</p>
+          </div>
+
+          <p id="auth-error" class="field-hint t-danger" role="alert" aria-live="polite" hidden></p>
+          <p id="auth-info" class="field-hint t-success" role="status" aria-live="polite" hidden></p>
+
+          <button type="submit" class="btn btn-primary btn-lg btn-block" id="auth-submit">Iniciar sesión</button>
+
+          <div class="row-between" style="margin-top:var(--sp-4)">
+            <button type="button" class="btn btn-ghost btn-sm" id="auth-forgot">He olvidado la contraseña</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="auth-local">Usar sin cuenta</button>
+          </div>
+        </form>
       </div>
-      <form id="authForm">
-        <div class="field">
-          <label>Email</label>
-          <input type="email" id="authEmail" placeholder="tu@email.com" required />
-        </div>
-        <div class="field">
-          <label>Contraseña</label>
-          <input type="password" id="authPassword" placeholder="••••••••" required minlength="6" />
-        </div>
-        <p class="auth-error" id="authError"></p>
-        <button type="submit" class="btn btn-primary btn-full" id="authSubmit">Iniciar sesión</button>
-      </form>
-      <p id="localModeMsg" style="display:none;color:var(--text-muted);font-size:13px;margin-top:16px;">Modo local — sin conexión al servidor</p>
+
+      <p class="auth-footer">
+        <span id="auth-cloud-state"></span>
+      </p>
     </div>
   </section>
 
-  <!-- ONBOARDING -->
-  <section class="screen" id="s-onboarding">
-    <div class="onboarding-container">
-      <div class="onboarding-progress">
-        <div class="onboarding-step active" data-step="0">1</div>
-        <div class="onboarding-step" data-step="1">2</div>
-        <div class="onboarding-step" data-step="2">3</div>
+  <!-- ==================================================================
+       ASISTENTE DE CONFIGURACIÓN
+       ================================================================== -->
+  <section id="wizard-screen" class="auth-screen" hidden>
+    <div class="auth-panel">
+      <div class="wizard-steps" id="wizard-steps" aria-hidden="true">
+        <span class="step is-active" data-wizard-dot="0">1</span>
+        <span class="step-line" data-wizard-line="0"></span>
+        <span class="step" data-wizard-dot="1">2</span>
+        <span class="step-line" data-wizard-line="1"></span>
+        <span class="step" data-wizard-dot="2">3</span>
       </div>
-      <div class="onboarding-content active" data-step="0">
-        <h2>¡Bienvenido a HORUS!</h2>
-        <p class="onboarding-sub">Configuremos tu perfil</p>
-        <div class="field" style="margin-top:24px;">
-          <label>¿Cómo te llamas?</label>
-          <input type="text" id="onboardingName" placeholder="Tu nombre" maxlength="30" />
-        </div>
-      </div>
-      <div class="onboarding-content" data-step="1">
-        <h2>Compañeros</h2>
-        <p class="onboarding-sub">Personas con las que compartes turnos</p>
-        <div class="chip-input-row">
-          <input type="text" id="onboardingMemberInput" placeholder="Nombre" maxlength="30" />
-          <button class="btn btn-primary btn-sm" id="onboardingAddMember">Añadir</button>
-        </div>
-        <div class="member-list" id="onboardingMemberList"></div>
-      </div>
-      <div class="onboarding-content" data-step="2">
-        <h2>Notificaciones</h2>
-        <p class="onboarding-sub">Recibe alarmas antes de tus turnos</p>
-        <div class="setting-row" style="margin-top:20px;">
-          <div>
-            <div class="label">Alarma de turno</div>
-            <div class="sub">Aviso antes de cada turno</div>
+
+      <div class="auth-card">
+        <form id="form-wizard" novalidate>
+          <!-- Paso 1: quién eres -->
+          <div class="wizard-step is-active" data-wizard-step="0">
+            <h2 class="t-xl">¿Cómo te llamas?</h2>
+            <p class="t-sm t-dim" style="margin-top:var(--sp-1)">Aparecerá en el cuadrante del equipo.</p>
+            <div class="field" style="margin-top:var(--sp-5)">
+              <label class="field-label" for="wizard-name">Tu nombre</label>
+              <input class="input" type="text" id="wizard-name" maxlength="40" placeholder="Ana Ruiz" autocomplete="name" required />
+            </div>
+            <div class="field">
+              <label class="field-label" for="wizard-hours">Horas semanales de contrato <span class="t-muted">(opcional)</span></label>
+              <input class="input" type="number" id="wizard-hours" min="0" max="80" step="0.5" placeholder="40" inputmode="decimal" />
+              <p class="field-hint">Se usa para avisarte cuando alguien se pasa o se queda corto.</p>
+            </div>
           </div>
-          <div class="switch" id="onboardingNotifSwitch" role="switch" aria-label="Alarma de turno" tabindex="0"></div>
-        </div>
-        <div class="setting-row">
-          <div>
-            <div class="label">Avisar con</div>
-            <div class="sub">Minutos de anticipación</div>
+
+          <!-- Paso 2: el equipo -->
+          <div class="wizard-step" data-wizard-step="1">
+            <h2 class="t-xl">Tu equipo</h2>
+            <p class="t-sm t-dim" style="margin-top:var(--sp-1)">Añade a las personas con las que compartes turnos. Podrás cambiarlas después.</p>
+
+            <div class="field" style="margin-top:var(--sp-5)">
+              <label class="field-label" for="wizard-member-input">Nombre del compañero</label>
+              <div class="input-group">
+                <input class="input" type="text" id="wizard-member-input" maxlength="40" placeholder="Luis Peña" />
+                <button type="button" class="btn" id="wizard-add-member">Añadir</button>
+              </div>
+            </div>
+
+            <div id="wizard-members" class="chip-row" aria-live="polite"></div>
+            <p class="field-hint" id="wizard-members-empty">Todavía no has añadido a nadie.</p>
+
+            <details style="margin-top:var(--sp-5)">
+              <summary class="t-sm t-dim" style="cursor:pointer">Importar desde un archivo</summary>
+              <p class="field-hint" style="margin-top:var(--sp-2)">
+                ¿Ya tenías el cuadrante en Excel? Importa un CSV con las columnas
+                <strong>Persona;Fecha;Turno</strong> y HORUS creará al equipo y los turnos.
+              </p>
+              <button type="button" class="btn btn-sm" id="wizard-import">Elegir archivo CSV…</button>
+            </details>
           </div>
-          <select id="onboardingMinutes">
-            <option value="10">10 min</option>
-            <option value="15">15 min</option>
-            <option value="30" selected>30 min</option>
-            <option value="45">45 min</option>
-            <option value="60">60 min</option>
-          </select>
-        </div>
-      </div>
-      <div class="onboarding-nav">
-        <button class="btn btn-ghost" id="onboardingPrev" style="visibility:hidden;">Atrás</button>
-        <button class="btn btn-primary" id="onboardingNext">Siguiente</button>
+
+          <!-- Paso 3: avisos y festivos -->
+          <div class="wizard-step" data-wizard-step="2">
+            <h2 class="t-xl">Avisos y festivos</h2>
+            <p class="t-sm t-dim" style="margin-top:var(--sp-1)">Dos ajustes que ahorran disgustos.</p>
+
+            <div class="setting-row" style="margin-top:var(--sp-5)">
+              <div>
+                <div class="label">Avisarme antes de cada turno</div>
+                <div class="sub">Una notificación con la antelación que elijas.</div>
+              </div>
+              <div class="switch switch-lg" id="wizard-notif" role="switch" aria-checked="false" tabindex="0" aria-label="Avisarme antes de cada turno"></div>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="wizard-lead">Antelación del aviso</label>
+              <select class="select" id="wizard-lead">
+                <option value="10">10 minutos</option>
+                <option value="15">15 minutos</option>
+                <option value="30" selected>30 minutos</option>
+                <option value="45">45 minutos</option>
+                <option value="60">1 hora</option>
+                <option value="120">2 horas</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label class="field-label" for="wizard-region">Comunidad autónoma (festivos)</label>
+              <select class="select" id="wizard-region">
+                <option value="ES">Solo festivos nacionales</option>
+              </select>
+              <p class="field-hint">Sirve para marcar los festivos en el calendario. Podrás editarlos a mano.</p>
+            </div>
+
+            <p class="field-hint" id="wizard-notif-note"></p>
+          </div>
+
+          <div class="row-between" style="margin-top:var(--sp-6)">
+            <button type="button" class="btn btn-ghost" id="wizard-prev" hidden>Atrás</button>
+            <span class="grow"></span>
+            <button type="submit" class="btn btn-primary btn-lg" id="wizard-next">Siguiente</button>
+          </div>
+        </form>
       </div>
     </div>
   </section>
 
-  <!-- APP -->
-  <section class="screen" id="s-app">
-    <header class="app-header">
-      <div class="app-header-left">
-        <h1>HORUS</h1>
-        <span class="profile-pill" id="profilePill">—</span>
-      </div>
-      <div class="app-header-right">
-        <button class="icon-btn" id="themeToggle" title="Tema" aria-label="Cambiar tema">
-          <svg class="theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-          <svg class="theme-icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-        <button class="icon-btn" id="syncBtn" title="Sincronizar" aria-label="Sincronizar">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        </button>
-        <button class="icon-btn" id="logoutBtn" title="Salir" aria-label="Cerrar sesión">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-        </button>
-      </div>
-    </header>
-    <div class="sync-bar" id="syncBar" style="display:none;"><span id="syncMsg"></span></div>
+  <!-- ==================================================================
+       APLICACIÓN
+       ================================================================== -->
+  <div id="app" hidden>
+    <!-- Navegación -->
+    <nav class="nav" id="nav" aria-label="Secciones principales">
+      <span class="nav-section-title">Cuadrante</span>
 
-    <section class="view active" id="view-calendar">
-      <div class="dashboard-today" id="dashboardToday">
-        <div class="dt-top">
-          <span class="dt-date" id="dtDate">Hoy</span>
-          <span class="dt-time" id="dtTime">--:--</span>
-        </div>
-        <div class="dt-bottom">
-          <span class="dt-shift" id="dtShift">Sin turno</span>
-          <span class="dt-hours" id="dtHours"></span>
-        </div>
-        <div class="dt-notes" id="dtNotes"></div>
-      </div>
-      <div class="month-nav">
-        <button id="prevMonth" aria-label="Mes anterior">‹</button>
-        <span class="month-label" id="monthLabel">Junio 2026</span>
-        <button id="nextMonth" aria-label="Mes siguiente">›</button>
-      </div>
-      <div class="legend" id="legend"></div>
-      <div class="timeline-axis" id="timelineAxis"></div>
-      <div id="calendarList"></div>
-    </section>
+      <button type="button" class="nav-item" data-view="today" aria-current="page">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.2 1.9" /></svg>
+        </span>
+        <span>Hoy</span>
+      </button>
 
-    <section class="view" id="view-catalog">
-      <h2 style="font-size:16px;margin:18px 0 4px;">Catálogo de turnos</h2>
-      <p style="color:var(--text-dim);font-size:12px;margin:0 0 16px;">Horario por defecto de cada tipo de turno.</p>
-      <div id="catalogList"></div>
-    </section>
-
-    <section class="view" id="view-settings">
-      <div class="settings-section" style="margin-top:18px;">
-        <h3>Perfil activo</h3>
-        <div class="select-row" id="profileRow"></div>
-        <div class="add-profile-row">
-          <input type="text" id="newProfileName" placeholder="Añadir nombre" />
-          <button id="btnAddProfile">Añadir</button>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Apariencia</h3>
-        <div class="setting-row">
-          <div><div class="label">Tema oscuro</div><div class="sub">Cambia entre claro y oscuro</div></div>
-          <div class="switch" id="settingsThemeSwitch" role="switch" aria-label="Tema oscuro" tabindex="0"></div>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Notificaciones</h3>
-        <div class="permission-banner" id="permBanner" style="display:none;">
-          Activa los permisos del navegador para recibir alarmas.
-          <button>Permitir notificaciones</button>
-        </div>
-        <div class="setting-row">
-          <div><div class="label">Alarma de turno</div><div class="sub">Aviso antes de tu turno</div></div>
-          <div class="switch" id="notifSwitch" role="switch" aria-label="Alarma de turno" tabindex="0"></div>
-        </div>
-        <div class="setting-row">
-          <div><div class="label">Avisar con</div><div class="sub">Minutos de anticipación</div></div>
-          <select id="minutesBefore">
-            <option value="10">10 min</option>
-            <option value="15">15 min</option>
-            <option value="30">30 min</option>
-            <option value="45">45 min</option>
-            <option value="60">60 min</option>
-          </select>
-        </div>
-      </div>
-      <div class="settings-section">
-        <h3>Cuenta</h3>
-        <div class="setting-row">
-          <div><div class="label">Email</div><div class="sub" id="userEmailDisplay">—</div></div>
-        </div>
-        <button class="btn btn-ghost btn-full" id="settingsLogout" style="margin-top:8px;">Cerrar sesión</button>
-      </div>
-    </section>
-
-    <!-- BOTTOM SHEET -->
-    <div class="sheet-backdrop" id="sheetBackdrop"></div>
-    <div class="sheet" id="daySheet">
-      <div class="sheet-handle"></div>
-      <h3 id="sheetTitle">Día</h3>
-      <p class="sheet-sub" id="sheetSub" style="text-transform:capitalize;"></p>
-      <span class="field-label">Tipo de día</span>
-      <div class="toggle-row" id="dayTypeToggle">
-        <button data-type="normal">Normal</button>
-        <button data-type="feriado">Feriado</button>
-        <button data-type="evento">Evento</button>
-      </div>
-      <span class="field-label">Turno</span>
-      <div class="chip-row" id="shiftChips"></div>
-      <div id="blocksEditor"></div>
-      <span class="field-label" style="margin-top:6px;">Notas</span>
-      <textarea id="sheetNotes" rows="2" placeholder="Notas para este día…"></textarea>
-      <div class="sheet-actions">
-        <button class="btn btn-danger" id="btnDeleteDay">Borrar</button>
-        <button class="btn btn-ghost" id="btnCancelDay">Cancelar</button>
-        <button class="btn btn-primary" id="btnSaveDay">Guardar</button>
-      </div>
-    </div>
-
-    <nav class="bottom-nav">
-      <button data-view="calendar" class="active" aria-label="Calendario">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+      <button type="button" class="nav-item" data-view="calendar">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="17" rx="2.5" /><path d="M8 3v3M16 3v3M3 10h18" /></svg>
+        </span>
         <span>Calendario</span>
       </button>
-      <button data-view="catalog" aria-label="Catálogo de turnos">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-        <span>Catálogo</span>
+
+      <button type="button" class="nav-item" data-view="roster">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18M3 14h18M9 4v16" /></svg>
+        </span>
+        <span>Cuadrante</span>
       </button>
-      <button data-view="settings" aria-label="Ajustes">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+
+      <button type="button" class="nav-item" data-view="team">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16.5 20v-1.8a3.6 3.6 0 0 0-3.6-3.6H5.6A3.6 3.6 0 0 0 2 18.2V20" /><circle cx="9.2" cy="7.4" r="3.4" /><path d="M22 20v-1.8a3.6 3.6 0 0 0-2.7-3.5M15.4 4.1a3.6 3.6 0 0 1 0 6.6" /></svg>
+        </span>
+        <span>Equipo <span class="nav-badge" id="nav-team-badge" hidden></span></span>
+      </button>
+
+      <span class="nav-spacer"></span>
+      <span class="nav-section-title">Configuración</span>
+
+      <button type="button" class="nav-item" data-view="hours">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></svg>
+        </span>
+        <span>Horas</span>
+      </button>
+
+      <button type="button" class="nav-item" data-view="settings">
+        <span class="nav-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" /></svg>
+        </span>
         <span>Ajustes</span>
       </button>
     </nav>
-  </section>
 
-  <script src="app.js"></script>
+    <!-- Contenido -->
+    <main class="main" id="main" role="main">
+      <!-- ---------- Cabecera ---------- -->
+      <header class="topbar">
+        <div class="topbar-inner">
+          <div class="topbar-brand">
+            <span class="logo" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="8.5" opacity=".4" /><circle cx="12" cy="12" r="4.5" /><circle cx="12" cy="9" r="1.4" fill="currentColor" stroke="none" /></svg>
+            </span>
+            <span class="name">HORUS</span>
+          </div>
+
+          <div class="topbar-title">
+            <h1 id="view-title">Hoy</h1>
+            <div class="sub" id="view-sub"></div>
+          </div>
+
+          <div class="topbar-actions">
+            <button type="button" class="icon-btn" id="btn-undo" title="Deshacer (Ctrl+Z)" aria-label="Deshacer" disabled>
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6" /><path d="M3.5 13a9 9 0 1 0 2.1-9.4L3 7" /></svg>
+            </button>
+
+            <button type="button" class="icon-btn" id="btn-theme" title="Cambiar tema" aria-label="Cambiar tema">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="icon-sun"><circle cx="12" cy="12" r="4.2" /><path d="M12 2v2M12 20v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M2 12h2M20 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4" /></svg>
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-moon"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" /></svg>
+            </button>
+
+            <button type="button" class="icon-btn" id="btn-sync" title="Sincronizar" aria-label="Sincronizar">
+              <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" id="sync-icon"><path d="M21 4v6h-6M3 20v-6h6" /><path d="M3.5 9a9 9 0 0 1 14.9-3.4L21 10M3 14l2.6 4.4A9 9 0 0 0 20.5 15" /></svg>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <!-- ---------- Barra de estado ---------- -->
+      <div class="status-bar is-offline" id="status-bar" hidden>
+        <span class="status-dot" id="status-dot"></span>
+        <span class="grow" id="status-text"></span>
+        <button type="button" class="btn btn-ghost btn-sm" id="status-action" hidden></button>
+      </div>
+
+      <!-- ================================================================
+           VISTA: HOY
+           ================================================================ -->
+      <section class="view is-active" id="view-today" data-view="today" aria-labelledby="view-title">
+        <div class="now-card">
+          <div class="row-between" style="align-items:flex-start">
+            <div>
+              <div class="now-time" id="today-clock">--:--</div>
+              <div class="now-date" id="today-date">—</div>
+            </div>
+            <div class="text-right">
+              <div class="now-zone t-2xs t-upper t-muted" id="today-week">Semana —</div>
+              <div class="t-2xs t-muted" id="today-count"></div>
+            </div>
+          </div>
+
+          <div id="today-next" style="margin-top:var(--sp-4)"></div>
+
+          <div class="row wrap" style="margin-top:var(--sp-4);gap:var(--sp-2)">
+            <button type="button" class="btn btn-primary btn-sm" id="today-edit">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+              Asignar turno
+            </button>
+            <button type="button" class="btn btn-sm" id="today-tomorrow">Ver mañana</button>
+          </div>
+        </div>
+
+        <section class="section">
+          <header>
+            <h2 class="t-md">De guardia ahora</h2>
+            <span class="badge" id="today-onduty-count">0</span>
+          </header>
+          <div class="onduty-list" id="today-onduty"></div>
+        </section>
+
+        <section class="section">
+          <header>
+            <h2 class="t-md">Cobertura de hoy</h2>
+            <button type="button" class="btn btn-ghost btn-sm" id="today-portrait">Ver el día</button>
+          </header>
+          <div id="today-coverage"></div>
+        </section>
+
+        <section class="section" id="today-gaps-section">
+          <header>
+            <h2 class="t-md">Huecos de cobertura</h2>
+          </header>
+          <div class="gap-list" id="today-gaps"></div>
+        </section>
+
+        <section class="section">
+          <header>
+            <h2 class="t-md">Mis turnos</h2>
+            <button type="button" class="btn btn-ghost btn-sm" data-go="calendar">Ver calendario</button>
+          </header>
+          <div class="list" id="today-mine"></div>
+        </section>
+
+        <section class="section" id="today-conflicts-section" hidden>
+          <header>
+            <h2 class="t-md t-warning">Cambios en conflicto</h2>
+            <button type="button" class="btn btn-ghost btn-sm" id="today-conflicts-dismiss">Descartar</button>
+          </header>
+          <div class="list" id="today-conflicts"></div>
+        </section>
+      </section>
+
+      <!-- ================================================================
+           VISTA: CALENDARIO
+           ================================================================ -->
+      <section class="view" id="view-calendar" data-view="calendar" hidden>
+        <div class="row wrap" style="gap:var(--sp-2)">
+          <div class="segmented" role="group" aria-label="Formato del calendario">
+            <button type="button" data-calendar-mode="month" aria-pressed="true">Mes</button>
+            <button type="button" data-calendar-mode="list" aria-pressed="false">Lista</button>
+          </div>
+          <span class="grow"></span>
+          <button type="button" class="btn btn-sm" id="calendar-filter" aria-expanded="false">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 5h18M6 12h12M10 19h4" /></svg>
+            <span id="calendar-filter-label">Todo el equipo</span>
+          </button>
+        </div>
+
+        <div id="calendar-filters" hidden></div>
+
+        <div class="month-nav">
+          <button type="button" class="icon-btn is-bordered" id="calendar-prev" aria-label="Mes anterior">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <div class="month-title" id="calendar-title">—<small id="calendar-subtitle"></small></div>
+          <button type="button" class="icon-btn is-bordered" id="calendar-next" aria-label="Mes siguiente">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+          </button>
+        </div>
+
+        <div class="row wrap" style="gap:var(--sp-1)">
+          <button type="button" class="btn btn-ghost btn-sm" id="calendar-today">Ir a hoy</button>
+          <span class="grow"></span>
+          <button type="button" class="btn btn-ghost btn-sm" id="calendar-export">Exportar</button>
+        </div>
+
+        <!-- Modo mes -->
+        <div id="calendar-month">
+          <div class="dow-header" id="calendar-dow"></div>
+          <div class="month-grid" id="calendar-grid" role="grid" aria-label="Cuadrante del mes"></div>
+          <div class="row wrap" style="margin-top:var(--sp-3);gap:var(--sp-3)" id="calendar-legend"></div>
+        </div>
+
+        <!-- Modo lista -->
+        <div id="calendar-list" hidden>
+          <div class="timeline-axis" id="calendar-axis"></div>
+          <div id="calendar-days"></div>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           VISTA: CUADRANTE
+           ================================================================ -->
+      <section class="view" id="view-roster" data-view="roster" hidden>
+        <div class="view-header">
+          <div>
+            <h2>Cuadrante</h2>
+            <p id="roster-sub">Todas las personas y todos los días, de un vistazo.</p>
+          </div>
+          <div class="row" style="gap:var(--sp-1)">
+            <button type="button" class="btn btn-sm" id="roster-copy">Copiar</button>
+            <button type="button" class="btn btn-sm" id="roster-print">Imprimir</button>
+          </div>
+        </div>
+
+        <div class="month-nav">
+          <button type="button" class="icon-btn is-bordered" id="roster-prev" aria-label="Mes anterior">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <div class="month-title" id="roster-title">—<small id="roster-subtitle"></small></div>
+          <button type="button" class="icon-btn is-bordered" id="roster-next" aria-label="Mes siguiente">
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6" /></svg>
+          </button>
+        </div>
+
+        <div class="roster-wrap">
+          <table class="roster" id="roster-table">
+            <thead id="roster-head"></thead>
+            <tbody id="roster-body"></tbody>
+            <tfoot id="roster-foot"></tfoot>
+          </table>
+        </div>
+
+        <div class="row wrap" style="gap:var(--sp-4)" id="roster-legend"></div>
+
+        <div id="roster-actions" class="card">
+          <div class="row wrap" style="gap:var(--sp-2)">
+            <button type="button" class="btn btn-sm" id="roster-rotate">Rotar turnos</button>
+            <button type="button" class="btn btn-sm" id="roster-pattern">Aplicar rotación</button>
+            <button type="button" class="btn btn-sm" id="roster-copyweek">Copiar semana</button>
+            <button type="button" class="btn btn-sm" id="roster-holiday">Marcar festivo</button>
+          </div>
+          <p class="field-hint" style="margin-top:var(--sp-3)">
+            Toca cualquier casilla para asignar o cambiar el turno de esa persona ese día.
+          </p>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           VISTA: EQUIPO
+           ================================================================ -->
+      <section class="view" id="view-team" data-view="team" hidden>
+        <div class="view-header">
+          <div>
+            <h2>Equipo</h2>
+            <p id="team-sub">—</p>
+          </div>
+          <button type="button" class="btn btn-primary btn-sm" id="team-add">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            Añadir
+          </button>
+        </div>
+
+        <div class="grid-3" id="team-stats"></div>
+
+        <section class="section">
+          <header>
+            <h2 class="t-md">Personas</h2>
+            <span class="t-2xs t-muted" id="team-count"></span>
+          </header>
+          <div class="stack-sm" id="team-list"></div>
+        </section>
+
+        <section class="section">
+          <header><h2 class="t-md">Carga de trabajo</h2></header>
+          <div class="card">
+            <div class="bars" id="team-workload"></div>
+            <p class="field-hint" style="margin-top:var(--sp-3)" id="team-workload-note"></p>
+          </div>
+        </section>
+
+        <section class="section">
+          <header><h2 class="t-md">Reparto por turno</h2></header>
+          <div class="card">
+            <div class="bars" id="team-by-type"></div>
+          </div>
+        </section>
+
+        <section class="section" id="team-alerts-section" hidden>
+          <header><h2 class="t-md t-warning">Avisos</h2></header>
+          <div class="stack-sm" id="team-alerts"></div>
+        </section>
+      </section>
+
+      <!-- ================================================================
+           VISTA: HORAS
+           ================================================================ -->
+      <section class="view" id="view-hours" data-view="hours" hidden>
+        <div class="view-header">
+          <div>
+            <h2>Horas</h2>
+            <p id="hours-sub">—</p>
+          </div>
+          <div class="segmented" role="group" aria-label="Periodo">
+            <button type="button" data-hours-range="month" aria-pressed="true">Mes</button>
+            <button type="button" data-hours-range="quarter" aria-pressed="false">Trimestre</button>
+            <button type="button" data-hours-range="year" aria-pressed="false">Año</button>
+          </div>
+        </div>
+
+        <div class="grid-2" id="hours-stats"></div>
+
+        <section class="section">
+          <header>
+            <h2 class="t-md">Horas por persona</h2>
+            <span class="t-2xs t-muted" id="hours-target-note"></span>
+          </header>
+          <div class="table-wrap">
+            <table class="data" id="hours-table">
+              <thead>
+                <tr>
+                  <th>Persona</th>
+                  <th class="num">Turnos</th>
+                  <th class="num">Días</th>
+                  <th class="num">Horas</th>
+                  <th class="num">Nocturnas</th>
+                  <th class="num">Fin de semana</th>
+                  <th class="num">Objetivo</th>
+                </tr>
+              </thead>
+              <tbody id="hours-body"></tbody>
+              <tfoot id="hours-foot"></tfoot>
+            </table>
+          </div>
+        </section>
+
+        <section class="section">
+          <header><h2 class="t-md">Evolución semanal</h2></header>
+          <div class="card"><div class="bars" id="hours-weeks"></div></div>
+        </section>
+
+        <section class="section">
+          <header><h2 class="t-md">Reparto por tipo de turno</h2></header>
+          <div class="card"><div class="bars" id="hours-types"></div></div>
+        </section>
+
+        <div class="row wrap" style="gap:var(--sp-2)">
+          <button type="button" class="btn btn-sm" id="hours-export">Exportar horas (CSV)</button>
+          <button type="button" class="btn btn-sm" id="hours-text">Copiar resumen</button>
+        </div>
+      </section>
+
+      <!-- ================================================================
+           VISTA: AJUSTES
+           ================================================================ -->
+      <section class="view" id="view-settings" data-view="settings" hidden>
+        <div class="view-header">
+          <div>
+            <h2>Ajustes</h2>
+            <p id="settings-sub">—</p>
+          </div>
+        </div>
+
+        <!-- Cuadrante -->
+        <div class="settings-group">
+          <h3 class="section-label">Cuadrante</h3>
+          <div class="setting-row">
+            <div><div class="label">Nombre del cuadrante</div><div class="sub">Aparece al exportar e imprimir.</div></div>
+            <div class="control" style="min-width:150px"><input class="input" type="text" id="settings-name" maxlength="60" /></div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">La semana empieza en</div><div class="sub">Cómo se agrupan las semanas en la vista de lista.</div></div>
+            <div class="control">
+              <select class="select" id="settings-weekstart" style="width:auto">
+                <option value="1">Lunes</option>
+                <option value="0">Domingo</option>
+                <option value="6">Sábado</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Personas necesarias por turno</div><div class="sub">Valor por defecto para calcular los huecos de cobertura.</div></div>
+            <div class="control">
+              <select class="select" id="settings-demand" style="width:auto">
+                <option value="0">0 · no exigir</option>
+                <option value="1">1 persona</option>
+                <option value="2">2 personas</option>
+                <option value="3">3 personas</option>
+                <option value="4">4 personas</option>
+              </select>
+            </div>
+          </div>
+          <button type="button" class="btn btn-block" id="settings-shift-types">Editar el catálogo de turnos</button>
+        </div>
+
+        <!-- Horas -->
+        <div class="settings-group">
+          <h3 class="section-label">Horas y contrato</h3>
+          <div class="setting-row">
+            <div><div class="label">Jornada semanal</div><div class="sub">Objetivo por defecto para cada persona.</div></div>
+            <div class="control" style="width:96px"><input class="input" type="number" id="settings-weekly" min="0" max="80" step="0.5" inputmode="decimal" /></div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Horas extra a partir de</div><div class="sub">Se resaltan las semanas que lo superan.</div></div>
+            <div class="control" style="width:96px"><input class="input" type="number" id="settings-overtime" min="0" max="80" step="0.5" inputmode="decimal" /></div>
+          </div>
+        </div>
+
+        <!-- Festivos -->
+        <div class="settings-group">
+          <h3 class="section-label">Festivos</h3>
+          <div class="setting-row">
+            <div><div class="label">Comunidad autónoma</div><div class="sub">Para cargar los festivos de tu zona.</div></div>
+            <div class="control">
+              <select class="select" id="settings-region" style="width:auto"></select>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Trasladar al lunes los que caen en domingo</div><div class="sub">Como hace el calendario laboral español.</div></div>
+            <div class="switch" id="settings-shift-sunday" role="switch" aria-checked="false" tabindex="0" aria-label="Trasladar festivos al lunes"></div>
+          </div>
+          <div class="row wrap" style="gap:var(--sp-2)">
+            <button type="button" class="btn btn-sm" id="settings-load-holidays">Cargar los festivos del año</button>
+            <button type="button" class="btn btn-sm" id="settings-clear-holidays">Quitar los importados</button>
+          </div>
+          <p class="field-hint" id="settings-holiday-note"></p>
+        </div>
+
+        <!-- Avisos -->
+        <div class="settings-group">
+          <h3 class="section-label">Avisos</h3>
+          <div id="settings-permission-banner" class="gap-item" hidden>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 9v4M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>
+            <div class="grow">
+              <div class="label">Falta el permiso del navegador</div>
+              <div class="sub">Sin él no se pueden mostrar los avisos de turno.</div>
+            </div>
+            <button type="button" class="btn btn-sm btn-primary" id="settings-ask-permission">Permitir</button>
+          </div>
+
+          <div class="setting-row">
+            <div><div class="label">Aviso antes de cada turno</div><div class="sub">Una notificación con la antelación elegida.</div></div>
+            <div class="switch" id="settings-notif" role="switch" aria-checked="false" tabindex="0" aria-label="Aviso antes de cada turno"></div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Antelación</div><div class="sub">Minutos antes de que empiece el turno.</div></div>
+            <div class="control">
+              <select class="select" id="settings-lead" style="width:auto">
+                <option value="10">10 minutos</option>
+                <option value="15">15 minutos</option>
+                <option value="30">30 minutos</option>
+                <option value="45">45 minutos</option>
+                <option value="60">1 hora</option>
+                <option value="120">2 horas</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Resumen del día siguiente</div><div class="sub">Un aviso con los turnos de mañana.</div></div>
+            <div class="switch" id="settings-briefing" role="switch" aria-checked="false" tabindex="0" aria-label="Resumen del día siguiente"></div>
+          </div>
+          <div class="setting-row" id="settings-briefing-hour-row" hidden>
+            <div><div class="label">Hora del resumen</div><div class="sub">Cuándo quieres recibirlo.</div></div>
+            <div class="control"><input class="input" type="time" id="settings-briefing-hour" style="width:120px" /></div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Avisar de días sin cubrir</div><div class="sub">Cuando el cuadrante tiene huecos de cobertura.</div></div>
+            <div class="switch" id="settings-coverage-alerts" role="switch" aria-checked="false" tabindex="0" aria-label="Avisar de días sin cubrir"></div>
+          </div>
+          <button type="button" class="btn btn-block" id="settings-test-notif">Probar una notificación</button>
+          <div id="settings-alarm-preview"></div>
+        </div>
+
+        <!-- Apariencia -->
+        <div class="settings-group">
+          <h3 class="section-label">Apariencia</h3>
+          <div class="setting-row">
+            <div><div class="label">Tema</div><div class="sub">Claro, oscuro o según el sistema.</div></div>
+            <div class="control">
+              <select class="select" id="settings-theme" style="width:auto">
+                <option value="auto">Automático</option>
+                <option value="dark">Oscuro</option>
+                <option value="light">Claro</option>
+              </select>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Números de semana</div><div class="sub">Muestra la semana ISO en el calendario.</div></div>
+            <div class="switch" id="settings-weeknumbers" role="switch" aria-checked="true" tabindex="0" aria-label="Números de semana"></div>
+          </div>
+          <div class="setting-row">
+            <div><div class="label">Modo compacto</div><div class="sub">Más información en menos espacio.</div></div>
+            <div class="switch" id="settings-compact" role="switch" aria-checked="false" tabindex="0" aria-label="Modo compacto"></div>
+          </div>
+        </div>
+
+        <!-- Nube -->
+        <div class="settings-group">
+          <h3 class="section-label">Cuenta y nube</h3>
+          <div class="card" id="settings-account"></div>
+          <div class="card" id="settings-cloud"></div>
+        </div>
+
+        <!-- Datos -->
+        <div class="settings-group">
+          <h3 class="section-label">Datos</h3>
+          <div class="setting-row">
+            <div><div class="label">Espacio usado</div><div class="sub" id="settings-storage">—</div></div>
+            <div class="control"><span class="badge" id="settings-storage-badge">—</span></div>
+          </div>
+          <button type="button" class="btn btn-block" id="settings-backup">Descargar copia de seguridad (JSON)</button>
+          <button type="button" class="btn btn-block" id="settings-restore">Restaurar desde un archivo</button>
+          <button type="button" class="btn btn-block" id="settings-backups">Recuperar una versión anterior</button>
+          <button type="button" class="btn btn-block" id="settings-import-csv">Importar cuadrante desde CSV</button>
+          <button type="button" class="btn btn-block" id="settings-export-ical">Exportar a calendario (.ics)</button>
+        </div>
+
+        <!-- Peligro -->
+        <div class="card danger-zone">
+          <div class="card-header"><h3>Zona delicada</h3></div>
+          <div class="card-body stack-sm">
+            <button type="button" class="btn btn-block" id="settings-clear-schedule">Borrar todos los turnos (conserva el equipo)</button>
+            <button type="button" class="btn btn-block" id="settings-signout">Cerrar sesión</button>
+            <button type="button" class="btn btn-danger btn-block" id="settings-reset">Empezar de cero</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h3>Acerca de</h3></div>
+          <div class="card-body">
+            <dl class="about-lines" id="settings-about"></dl>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ==================================================================
+       DIÁLOGO: editar un día
+       ================================================================== -->
+  <dialog class="sheet" id="dialog-day" aria-labelledby="day-title">
+    <form method="dialog" class="sheet-panel" id="form-day">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <header class="sheet-header">
+        <div>
+          <h2 id="day-title">Día</h2>
+          <div class="sub" id="day-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="sheet-body">
+        <div class="row wrap" style="gap:var(--sp-2);margin-bottom:var(--sp-4)">
+          <button type="button" class="btn btn-sm" id="day-mark-holiday">Marcar festivo</button>
+          <button type="button" class="btn btn-sm" id="day-mark-event">Marcar evento</button>
+          <button type="button" class="btn btn-sm" id="day-clear-marks" hidden>Quitar marca</button>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="day-demand">Personas necesarias este día</label>
+          <select class="select" id="day-demand">
+            <option value="">Usar el valor por defecto</option>
+            <option value="0">0 · no hace falta nadie</option>
+            <option value="1">1 persona</option>
+            <option value="2">2 personas</option>
+            <option value="3">3 personas</option>
+            <option value="4">4 personas</option>
+            <option value="5">5 personas</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="day-label">Etiqueta del día <span class="t-muted">(opcional)</span></label>
+          <input class="input" type="text" id="day-label" maxlength="60" placeholder="Ej.: inventario, cierre anual…" />
+        </div>
+
+        <div id="day-coverage" style="margin-bottom:var(--sp-4)"></div>
+
+        <h3 class="section-label" style="margin-bottom:var(--sp-2)">Turnos del equipo</h3>
+        <div id="day-entries" class="stack-sm"></div>
+
+        <button type="button" class="btn btn-block" id="day-add-entry" style="margin-top:var(--sp-3)">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+          Añadir un turno
+        </button>
+
+        <div class="field" style="margin-top:var(--sp-4)">
+          <label class="field-label" for="day-notes">Notas del día</label>
+          <textarea class="textarea" id="day-notes" rows="2" maxlength="500" placeholder="Cualquier cosa que el equipo deba saber…"></textarea>
+        </div>
+      </div>
+
+      <footer class="sheet-footer">
+        <button type="button" class="btn btn-danger btn-sm" id="day-delete">Borrar el día</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="day-save">Guardar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: asignar un turno
+       ================================================================== -->
+  <dialog class="sheet" id="dialog-assign" aria-labelledby="assign-title">
+    <form method="dialog" class="sheet-panel" id="form-assign">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <header class="sheet-header">
+        <div>
+          <h2 id="assign-title">Asignar turno</h2>
+          <div class="sub" id="assign-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="sheet-body">
+        <div class="field" id="assign-date-field">
+          <label class="field-label" for="assign-date">Fecha</label>
+          <div class="input-group">
+            <input class="input" type="date" id="assign-date" />
+            <button type="button" class="btn btn-sm" id="assign-today">Hoy</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Personas</span>
+          <div class="row wrap" style="gap:var(--sp-2);margin-bottom:var(--sp-2)">
+            <button type="button" class="btn btn-sm" id="assign-all">Todas</button>
+            <button type="button" class="btn btn-sm" id="assign-none">Ninguna</button>
+          </div>
+          <div class="chip-row" id="assign-members" role="group" aria-label="Personas a las que asignar el turno"></div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Tipo de turno</span>
+          <div class="chip-row" id="assign-types" role="group" aria-label="Tipo de turno"></div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="assign-notes">Nota del turno <span class="t-muted">(opcional)</span></label>
+          <input class="input" type="text" id="assign-notes" maxlength="200" placeholder="Ej.: cubre a Marta" />
+        </div>
+
+        <details id="assign-repeat-details">
+          <summary class="t-sm t-dim" style="cursor:pointer">Repetir en varios días</summary>
+          <div class="stack-sm" style="margin-top:var(--sp-3)">
+            <div class="field">
+              <label class="field-label" for="assign-until">Hasta el día</label>
+              <input class="input" type="date" id="assign-until" />
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <span class="field-label">Días de la semana</span>
+              <div class="chip-row" id="assign-weekdays" role="group" aria-label="Días de la semana"></div>
+            </div>
+            <div class="setting-row" style="margin-top:var(--sp-2)">
+              <div><div class="label">No sobrescribir</div><div class="sub">Respeta los turnos que ya existan.</div></div>
+              <div class="switch" id="assign-skip" role="switch" aria-checked="true" tabindex="0" aria-label="No sobrescribir turnos existentes"></div>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <footer class="sheet-footer">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="assign-save">Asignar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: editar un tipo de turno
+       ================================================================== -->
+  <dialog class="dialog" id="dialog-type" aria-labelledby="type-title">
+    <form method="dialog" class="dialog-panel" id="form-type">
+      <header class="dialog-header">
+        <div>
+          <h2 id="type-title">Tipo de turno</h2>
+          <div class="sub" id="type-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="dialog-body">
+        <div class="row" style="gap:var(--sp-3);align-items:flex-start">
+          <div class="field" style="width:96px">
+            <label class="field-label" for="type-code">Código</label>
+            <input class="input t-center t-bold" type="text" id="type-code" maxlength="5" placeholder="M" />
+          </div>
+          <div class="field grow">
+            <label class="field-label" for="type-label">Nombre</label>
+            <input class="input" type="text" id="type-label" maxlength="40" placeholder="Mañana" />
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field-label">Color</span>
+          <div class="swatch-grid" id="type-colors" role="group" aria-label="Color del turno"></div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="type-kind">Qué representa</label>
+          <select class="select" id="type-kind">
+            <option value="work">Turno trabajado</option>
+            <option value="leave">Vacaciones</option>
+            <option value="sick">Baja</option>
+            <option value="free">Libre / descanso</option>
+            <option value="rest">Festivo</option>
+          </select>
+          <p class="field-hint" id="type-kind-hint"></p>
+        </div>
+
+        <div class="field" id="type-blocks-field">
+          <span class="field-label">Horario</span>
+          <div id="type-blocks" class="stack-sm"></div>
+          <button type="button" class="btn btn-sm" id="type-add-block" style="margin-top:var(--sp-2)">Añadir tramo</button>
+          <p class="field-hint" id="type-blocks-hint">Deja la hora de fin antes de la de inicio para un turno que cruza medianoche.</p>
+        </div>
+
+        <div class="row" style="gap:var(--sp-3)">
+          <div class="field grow">
+            <label class="field-label" for="type-demand">Personas necesarias</label>
+            <input class="input" type="number" id="type-demand" min="0" max="99" step="1" inputmode="numeric" />
+            <p class="field-hint">Cuántas personas hacen falta con este turno para cubrir el servicio.</p>
+          </div>
+        </div>
+      </div>
+
+      <footer class="dialog-footer">
+        <button type="button" class="btn btn-danger btn-sm" id="type-delete">Eliminar</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="type-save">Guardar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: editar una persona
+       ================================================================== -->
+  <dialog class="dialog" id="dialog-member" aria-labelledby="member-title">
+    <form method="dialog" class="dialog-panel" id="form-member">
+      <header class="dialog-header">
+        <div>
+          <h2 id="member-title">Persona</h2>
+          <div class="sub" id="member-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="dialog-body">
+        <div class="row" style="gap:var(--sp-3);align-items:flex-start">
+          <span class="avatar avatar-lg" id="member-preview" aria-hidden="true">?</span>
+          <div class="grow">
+            <div class="field" style="margin-bottom:var(--sp-3)">
+              <label class="field-label" for="member-name">Nombre</label>
+              <input class="input" type="text" id="member-name" maxlength="40" required />
+            </div>
+            <div class="field" style="margin-bottom:0">
+              <label class="field-label" for="member-initials">Iniciales</label>
+              <input class="input" type="text" id="member-initials" maxlength="3" placeholder="Auto" />
+            </div>
+          </div>
+        </div>
+
+        <div class="field" style="margin-top:var(--sp-4)">
+          <span class="field-label">Color</span>
+          <div class="swatch-grid" id="member-colors" role="group" aria-label="Color de la persona"></div>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="member-role">Rol</label>
+          <select class="select" id="member-role">
+            <option value="owner">Responsable</option>
+            <option value="admin">Administra</option>
+            <option value="member">Miembro</option>
+            <option value="viewer">Solo consulta</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="member-hours">Horas semanales de contrato <span class="t-muted">(opcional)</span></label>
+          <input class="input" type="number" id="member-hours" min="0" max="80" step="0.5" inputmode="decimal" placeholder="40" />
+        </div>
+
+        <div class="setting-row">
+          <div><div class="label">Activo en el cuadrante</div><div class="sub">Los inactivos no aparecen al asignar turnos.</div></div>
+          <div class="switch" id="member-active" role="switch" aria-checked="true" tabindex="0" aria-label="Activo en el cuadrante"></div>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="label">Soy yo</div><div class="sub">Marca quién eres para ver tus turnos primero.</div></div>
+          <button type="button" class="btn btn-sm" id="member-set-me">Marcar</button>
+        </div>
+      </div>
+
+      <footer class="dialog-footer">
+        <button type="button" class="btn btn-danger btn-sm" id="member-delete">Eliminar</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="member-save">Guardar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: aplicar una rotación
+       ================================================================== -->
+  <dialog class="dialog" id="dialog-pattern" aria-labelledby="pattern-title">
+    <form method="dialog" class="dialog-panel" id="form-pattern">
+      <header class="dialog-header">
+        <div>
+          <h2 id="pattern-title">Aplicar rotación</h2>
+          <div class="sub">Repite un ciclo de turnos durante un periodo.</div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="dialog-body">
+        <div class="field">
+          <label class="field-label" for="pattern-member">Persona</label>
+          <select class="select" id="pattern-member"></select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="pattern-saved">Rotación guardada</label>
+          <select class="select" id="pattern-saved">
+            <option value="">— Crear una nueva —</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="pattern-name">Nombre de la rotación</label>
+          <input class="input" type="text" id="pattern-name" maxlength="60" placeholder="Ej.: 2 mañanas, 2 tardes, 2 noches, 2 libres" />
+        </div>
+
+        <div class="field">
+          <span class="field-label">Ciclo (en orden)</span>
+          <div id="pattern-cycle" class="chip-row" style="margin-bottom:var(--sp-2)"></div>
+          <div class="input-group">
+            <select class="select" id="pattern-add-type" style="flex:1"><option value="">Añadir turno al ciclo…</option></select>
+            <button type="button" class="btn" id="pattern-add">Añadir</button>
+          </div>
+          <p class="field-hint" id="pattern-cycle-hint">Sin pasos en el ciclo.</p>
+        </div>
+
+        <div class="field">
+          <label class="field-label" for="pattern-step">Días por paso</label>
+          <input class="input" type="number" id="pattern-step" min="1" max="30" step="1" value="1" inputmode="numeric" />
+          <p class="field-hint">Cuántos días seguidos dura cada turno del ciclo. Con 2, una rotación de 4 turnos cubre 8 días.</p>
+        </div>
+
+        <div class="row" style="gap:var(--sp-3)">
+          <div class="field grow">
+            <label class="field-label" for="pattern-from">Desde</label>
+            <input class="input" type="date" id="pattern-from" />
+          </div>
+          <div class="field grow">
+            <label class="field-label" for="pattern-to">Hasta</label>
+            <input class="input" type="date" id="pattern-to" />
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div><div class="label">Guardar la rotación</div><div class="sub">Para poder reutilizarla en el futuro.</div></div>
+          <div class="switch" id="pattern-save" role="switch" aria-checked="true" tabindex="0" aria-label="Guardar la rotación"></div>
+        </div>
+      </div>
+
+      <footer class="dialog-footer">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="submit" class="btn btn-primary" id="pattern-apply">Aplicar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: exportar
+       ================================================================== -->
+  <dialog class="dialog" id="dialog-export" aria-labelledby="export-title">
+    <form method="dialog" class="dialog-panel" id="form-export">
+      <header class="dialog-header">
+        <div>
+          <h2 id="export-title">Exportar</h2>
+          <div class="sub" id="export-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+
+      <div class="dialog-body">
+        <div class="field">
+          <label class="field-label" for="export-from">Desde</label>
+          <input class="input" type="date" id="export-from" />
+        </div>
+        <div class="field">
+          <label class="field-label" for="export-to">Hasta</label>
+          <input class="input" type="date" id="export-to" />
+        </div>
+        <div class="field">
+          <span class="field-label">Formato</span>
+          <div class="stack-sm" id="export-formats"></div>
+        </div>
+
+        <details>
+          <summary class="t-sm t-dim" style="cursor:pointer">Vista previa</summary>
+          <pre class="textarea t-xs t-mono" id="export-preview" style="max-height:220px;overflow:auto;margin-top:var(--sp-2)"></pre>
+        </details>
+      </div>
+
+      <footer class="dialog-footer">
+        <span class="grow"></span>
+        <button type="button" class="btn" data-close>Cancelar</button>
+        <button type="button" class="btn btn-primary" id="export-download">Descargar</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: confirmación
+       ================================================================== -->
+  <dialog class="dialog" id="dialog-confirm" aria-labelledby="confirm-title">
+    <div class="dialog-panel">
+      <header class="dialog-header">
+        <div>
+          <h2 id="confirm-title">¿Seguro?</h2>
+          <div class="sub" id="confirm-sub"></div>
+        </div>
+      </header>
+      <div class="dialog-body">
+        <p id="confirm-message" class="t-sm"></p>
+        <div id="confirm-extra"></div>
+      </div>
+      <footer class="dialog-footer">
+        <span class="grow"></span>
+        <button type="button" class="btn" id="confirm-cancel">Cancelar</button>
+        <button type="button" class="btn btn-danger" id="confirm-ok">Confirmar</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- ==================================================================
+       DIÁLOGO: retrato de un día (vista de solo lectura)
+       ================================================================== -->
+  <dialog class="sheet" id="dialog-day-view" aria-labelledby="dayview-title">
+    <div class="sheet-panel">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <header class="sheet-header">
+        <div>
+          <h2 id="dayview-title">Día</h2>
+          <div class="sub" id="dayview-sub"></div>
+        </div>
+        <button type="button" class="icon-btn" data-close aria-label="Cerrar">
+          <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </header>
+      <div class="sheet-body" id="dayview-body"></div>
+      <footer class="sheet-footer">
+        <button type="button" class="btn" id="dayview-copy">Copiar</button>
+        <span class="grow"></span>
+        <button type="button" class="btn btn-primary" id="dayview-edit">Editar el día</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <!-- Avisos flotantes -->
+  <div class="toast-region" id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
+
+  <noscript>
+    <div style="padding:2rem;text-align:center">
+      <h1>HORUS necesita JavaScript</h1>
+      <p>Esta aplicación funciona por completo en tu navegador; activa JavaScript para usarla.</p>
+    </div>
+  </noscript>
+
+  <script type="module" src="js/app.js"></script>
 </body>
 </html>
