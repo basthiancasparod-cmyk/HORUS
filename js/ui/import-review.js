@@ -120,8 +120,15 @@ export async function openImportDialog(context, preset = {}) {
 }
 
 function wireDialogOnce() {
-  if (dialog.__wired) return;
-  dialog.__wired = true;
+  /* OJO con la marca: `dialogs.js` usa `dialog.__wired` para TODOS los diálogos
+     y la aplicación los cablea al arrancar. Cuando aquí se usaba la misma marca,
+     el diálogo de importar ya venía marcado como cableado, esta función se salía
+     sin enganchar nada y el botón de importar no hacía absolutamente nada: sin
+     error, sin aviso, con la revisión pintada y perfecta. Costó encontrar porque
+     el síntoma no se parece en nada a la causa.
+     Por eso la marca es propia y con nombre distinto. */
+  if (dialog.__importWired) return;
+  dialog.__importWired = true;
 
   byId('import-cancel').addEventListener('click', () => closeDialog(dialog));
   byId('import-commit').addEventListener('click', commit);
@@ -1102,13 +1109,32 @@ async function commit() {
 
     const result = mod.commitImportedEntries(liveCtx().store, entries, { year, month });
 
-    // Cerrar y avisar es cosmético: si fallara, el cuadrante YA está importado.
-    // Por eso va en su propio try, para no convertir un éxito en un error.
+    // Todo lo de después va en su propio try: cerrar y avisar es cosmético y no
+    // puede convertir una importación correcta en un error.
     try {
       closeDialog(dialog);
 
+      /* Rastro para diagnóstico. Si algo va mal, esto es lo que hay que mirar:
+         antes no se imprimía nada y era imposible saber qué había pasado. */
+      console.info('[import] resumen:', {
+        mes: monthKey,
+        propuestas: entries.length,
+        importados: result?.imported ?? 0,
+        personasNuevas: result?.members ?? 0,
+        omitidos: result?.skipped ?? 0,
+        motivos: result?.reasons ?? [],
+      });
+
       if (!result?.imported) {
-        notify.warning('No se ha importado ningún turno. Revisa los códigos asignados.');
+        /* POR QUÉ SE ENSEÑAN LOS MOTIVOS: si el motor no importa nada, guarda en
+           `reasons` la explicación (por ejemplo, que un turno no está en el
+           catálogo o que el lote falló a medias). Antes se descartaba y el
+           usuario solo veía un aviso genérico; eso es lo que convertía cualquier
+           problema en un misterio irresoluble. */
+        const motivo = result?.reasons?.length
+          ? result.reasons.slice(0, 3).join(' ')
+          : 'Ningún turno tenía un tipo asignado: revisa los códigos del cuadrante.';
+        notify.error(`No se ha importado nada. ${motivo}`, { duration: 12000 });
         return;
       }
 
@@ -1122,12 +1148,24 @@ async function commit() {
       );
 
       if (result.skipped) {
-        setTimeout(() => notify.info(`${result.skipped} turno(s) se han omitido por no tener tipo asignado.`), 900);
+        // Si algo se ha omitido, se dice POR QUÉ. Antes salía un «N turnos
+        // omitidos» sin explicación, y el motivo (un turno que no está en el
+        // catálogo, por ejemplo) se quedaba guardado en `reasons` sin que nadie
+        // lo leyera nunca.
+        const porque = result.reasons?.length ? ` ${result.reasons[0]}` : ' No tenían tipo asignado.';
+        setTimeout(() => notify.warning(`${result.skipped} turno(s) sin importar.${porque}`, {
+          duration: 12000,
+        }), 900);
       }
 
-      // Llevar la vista al mes importado para comprobarlo
-      const { setFocusDate, invalidate } = await import('./context.js');
+      /* Llevar la vista al mes importado, SIEMPRE y de forma explícita.
+         `invalidate()` repinta la vista que esté abierta, y la importación se
+         puede lanzar desde Ajustes: en ese caso el usuario se quedaba mirando
+         Ajustes después de importar y parecía que no había pasado nada. Ahora se
+         navega al Cuadrante y se pone el foco en el mes importado. */
+      const { setFocusDate, invalidate, setCurrentView } = await import('./context.js');
       setFocusDate(`${monthKey}-01`);
+      setCurrentView('roster');
       invalidate();
     } catch (err) {
       console.error('[import] el cuadrante se ha importado, pero falló el aviso posterior:', err);

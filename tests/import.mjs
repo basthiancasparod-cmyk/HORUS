@@ -462,6 +462,7 @@ globalThis.window = env.window;
 const model2 = await import('../js/core/model.js');
 const contextMod = await import('../js/ui/context.js');
 const importUi = await import('../js/ui/import-review.js');
+const dialogsMod = await import('../js/ui/dialogs.js');
 
 /** Monta un contexto mínimo, como el de la aplicación. */
 function montarApp() {
@@ -609,6 +610,65 @@ await it('una casilla desconocida ignorada no se importa, pero el resto sí', as
   const sinTipo = store.doc.entries.filter((e) => !e.typeId);
   eq(sinTipo.length, 0, 'ninguna entrada se guarda sin tipo de turno');
   ok(store.doc.entries.length >= 120, `turnos importados: ${store.doc.entries.length}`);
+});
+
+/**
+ * EL FALLO QUE SE COLÓ EN PRODUCCIÓN.
+ *
+ * `dialogs.js` marca los diálogos con `dialog.__wired` al cablearlos en el
+ * arranque de la aplicación. `import-review.js` usaba LA MISMA marca, así que al
+ * abrir el diálogo se encontraba la marca puesta, se salía sin enganchar el botón
+ * y pulsar «Importar» no hacía nada: sin error, sin aviso y con la revisión
+ * pintada perfectamente. Las pruebas de arriba abren el diálogo sin cablear
+ * antes, y por eso no lo veían.
+ *
+ * Esta prueba arranca como la aplicación de verdad: primero `wireAllDialogs()`.
+ */
+await it('el botón funciona aunque la app haya cableado los diálogos antes', async () => {
+  env.reset();
+  const { store, ctx } = montarApp();
+
+  const elDialogo = env.document.getElementById('dialog-import');
+  // `env.reset()` no vuelve a construir el DOM, así que las marcas de un diálogo
+  // ya usado siguen puestas. Se borran para simular una carga limpia de la app,
+  // que es la situación en la que aparecía el fallo.
+  delete elDialogo.__wired;
+  delete elDialogo.__importWired;
+
+  // Lo que hace `js/app.js` al arrancar: cablear TODOS los diálogos.
+  dialogsMod.wireAllDialogs();
+  is(elDialogo.__wired, true, 'el arranque deja el diálogo marcado como cableado');
+
+  await importUi.openImportDialog(ctx, {
+    file: archivoFalso('cuadrante.pdf', 'application/pdf', bytes),
+  });
+
+  const boton = env.document.getElementById('import-commit');
+  ok(!boton.hidden && !boton.disabled, 'el botón está listo para pulsar');
+
+  boton.click();
+  for (let i = 0; i < 40 && !store.doc.entries.length; i++) await esperar(15);
+
+  ok(store.doc.entries.length > 100,
+    `pulsar tiene que importar de verdad: ${store.doc.entries.length} turnos`);
+  is(elDialogo.open, false, 'y el diálogo se cierra');
+});
+
+await it('los días «RE» (reunión) del cuadrante no se pierden', async () => {
+  env.reset();
+  const { store, ctx } = montarApp();
+  is(store.doc.shiftTypes.some((t) => t.code === 'RE'), true,
+    'el catálogo por defecto tiene el turno de reunión');
+
+  await importUi.openImportDialog(ctx, {
+    file: archivoFalso('cuadrante.pdf', 'application/pdf', bytes),
+  });
+  env.document.getElementById('import-commit').click();
+  for (let i = 0; i < 40 && !store.doc.entries.length; i++) await esperar(15);
+
+  const re = store.doc.shiftTypes.find((t) => t.code === 'RE');
+  const dias = store.doc.entries.filter((e) => e.typeId === re.id);
+  is(dias.length, 1, 'el cuadrante trae un día de reunión y se importa');
 });
 
 /* ==================================================================== *

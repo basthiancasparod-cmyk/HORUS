@@ -89,6 +89,11 @@ export function defaultShiftTypes() {
     mk('INT', 'Intermedio', '#2DD4BF', [{ start: '13:30', end: '22:00' }], 'work'),
     mk('N', 'Noche', '#7986CB', [{ start: '22:00', end: '06:00' }], 'work'),
     mk('P', 'Partido', '#C77DFF', [{ start: '08:30', end: '13:00' }, { start: '17:00', end: '21:00' }], 'work'),
+    // Reunión: el cuadrante de la empresa la marca con `RE` (y a veces `R`). Sin
+    // este turno en el catálogo, esos días se descartaban al importar. Se deja
+    // SIN horario a propósito: el cuadrante no dice a qué hora es, y inventarlo
+    // sería peor que dejarlo en blanco para que se ajuste en Ajustes.
+    mk('RE', 'Reunión', '#A78BFA', [], 'work'),
     mk('V', 'Vacaciones', '#7C9885', [], 'leave'),
     mk('B', 'Baja', '#EF5B5B', [], 'sick'),
     mk('L', 'Libre', '#8A93A8', [], 'free'),
