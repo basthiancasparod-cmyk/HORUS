@@ -1602,6 +1602,19 @@ a.btn { text-decoration: none; }
   border: 1px solid var(--border);
 }
 
+.next-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.next-empty .grow { min-width: 0; flex: 1 1 60%; }
+
 .next-card .next-label {
   font-size: var(--fs-2xs);
   font-weight: 700;

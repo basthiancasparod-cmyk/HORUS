@@ -149,50 +149,69 @@ function paintNext(doc, ctx) {
   clear(box);
 
   const now = new Date();
-  const mine = doc.meId ? nextShift(doc, doc.meId, now) : null;
-  const team = mine ? null : nextShift(doc, null, now);
+  const meId = doc.meId;
 
-  if (!mine && !team) {
-    // Sin turnos: o no hay ninguno, o todos han pasado ya
-    const upcoming = upcomingShifts(doc, { from: addDays(todayKey(), 1), limit: 1 });
-    box.appendChild(el('div', { class: 'row-between' }, [
-      el('div', {}, [
-        el('div', { class: 't-sm t-dim' }, 'No tienes turnos próximos'),
-        el('div', { class: 'field-hint' }, upcoming.length
-          ? `El siguiente del equipo es el ${formatShortDate(upcoming[0].date)}.`
-          : 'Añade turnos para verlos aquí.'),
+  /* Esta tarjeta responde a una sola pregunta: «¿cuándo trabajo yo?». Por eso NO
+     se enseña aquí el próximo turno del equipo: no responde a esa pregunta y
+     ocupaba el sitio más visible del dashboard. Si no hay turno propio, se dice,
+     y se explica qué puede estar pasando. */
+
+  if (!meId) {
+    box.appendChild(el('div', { class: 'next-empty' }, [
+      el('div', { class: 'grow' }, [
+        el('div', { class: 't-sm t-semibold' }, 'No has indicado quién eres'),
+        el('div', { class: 'field-hint' }, 'Marca tu nombre en Equipo y aquí verás cuándo trabajas.'),
       ]),
       el('button', {
-        type: 'button', class: 'btn btn-sm btn-primary',
-        onclick: () => ctx.openAssign({ date: currentDate() }),
-      }, 'Asignar'),
+        type: 'button', class: 'btn btn-sm',
+        onclick: () => ctx.navigate('team'),
+      }, 'Ir a Equipo'),
     ]));
     return;
   }
 
-  const target = mine || team;
-  const minutes = target.minutesUntil;
-  const soon = minutes <= 120;
-  const isMine = !!mine;
+  const mine = nextShift(doc, meId, now);
 
-  const card = el('div', { class: `next-card ${isMine ? 'is-mine' : 'is-team'}` }, [
-    avatar(target.member, { size: 'md' }),
+  if (!mine) {
+    box.appendChild(el('div', { class: 'next-empty' }, [
+      el('div', { class: 'grow' }, [
+        el('div', { class: 't-sm t-semibold' }, 'No tienes turnos próximos'),
+        el('div', { class: 'field-hint' },
+          'No hay ningún turno tuyo de aquí en adelante. Si esperabas tenerlos, revisa en '
+          + 'Equipo que tu ficha sea la que lleva los turnos: al importar puede haberse '
+          + 'creado otra con tu nombre.'),
+      ]),
+      el('button', {
+        type: 'button', class: 'btn btn-sm btn-primary',
+        onclick: () => ctx.openAssign({ date: currentDate(), memberIds: [meId] }),
+      }, 'Asignarme uno'),
+    ]));
+    return;
+  }
+
+  const minutes = mine.minutesUntil;
+  const soon = minutes <= 120;
+
+  const card = el('div', { class: 'next-card is-mine' }, [
+    avatar(mine.member, { size: 'md' }),
     el('div', { class: 'grow', style: { minWidth: '0' } }, [
-      el('div', { class: 'next-label' }, isMine ? 'Tu próximo turno' : 'Próximo turno del equipo'),
+      el('div', { class: 'next-label' }, 'Tu próximo turno'),
       el('div', { class: 'next-who' }, [
-        el('span', { class: 'next-name' }, target.member?.name || 'Alguien'),
-        isMine ? el('span', { class: 'badge badge-accent next-me' }, 'Eres tú') : null,
-        target.type ? el('span', { class: 'next-type' }, target.type.label) : null,
+        el('span', { class: 'next-name' }, mine.member?.name || 'Tú'),
+        el('span', { class: 'badge badge-accent next-me' }, 'Eres tú'),
+        mine.type ? el('span', { class: 'next-type' }, mine.type.label) : null,
       ]),
       el('div', { class: 't-xs t-dim' }, [
-        formatBlocks([target.block]),
-        crossesMidnight(target.block) ? ' (cruza medianoche)' : '',
-        target.entry?.notes ? ` · ${target.entry.notes}` : '',
+        formatShortDate(mine.startDate),
+        ' · ',
+        formatBlocks([mine.block]),
+        crossesMidnight(mine.block) ? ' (cruza medianoche)' : '',
+        mine.entry?.notes ? ` · ${mine.entry.notes}` : '',
       ].join('')),
     ]),
     el('div', { class: 'next-when' }, [
       el('div', { class: 'countdown' }, formatRelative(minutes * 60000).replace(/^en /, 'en ')),
-      el('div', { class: 't-2xs t-muted' }, formatClock(new Date(target.startsAt))),
+      el('div', { class: 't-2xs t-muted' }, formatClock(new Date(mine.startsAt))),
     ]),
   ]);
 
