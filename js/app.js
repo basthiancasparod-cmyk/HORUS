@@ -257,8 +257,22 @@ async function runSync({ manual = false, full = false } = {}) {
 
   try {
     const result = await sync.sync({ full });
-    if (result?.skipped) {
-      if (manual) setStatus({ text: 'No había nada que sincronizar.', kind: 'success' });
+    // `sync()` puede devolver null (o nada) si ya había otra sincronización en
+    // marcha: sin esta guarda, leer `result.pushed` lanzaba un TypeError que se
+    // veía en consola como «error de sincronización» sin más explicación.
+    if (!result) {
+      if (manual) setStatus({ text: 'Ya había una sincronización en marcha.', kind: 'syncing' });
+      return;
+    }
+    if (result.skipped) {
+      if (manual) {
+        setStatus({
+          text: result.reason === 'offline'
+            ? 'Sin conexión: se reintentará solo.'
+            : 'Sin cuenta configurada: los datos se quedan en este dispositivo.',
+          kind: result.reason === 'offline' ? 'warning' : 'success',
+        });
+      }
       return;
     }
     const parts = [];

@@ -15,7 +15,7 @@
  *     si fueran actuales sería peor que no responder.
  */
 
-const VERSION = 'v4.1.0';
+const VERSION = 'v4.2.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 
@@ -148,9 +148,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3) Estáticos propios: caché primero
+  // 3) Estáticos propios (JS, CSS, HTML): RED primero, caché como respaldo.
+  // Se explica el porqué en `networkFirst`.
   if (url.origin === self.location.origin && isStaticAsset(url)) {
-    event.respondWith(cacheFirst(request, CACHE));
+    event.respondWith(networkFirst(request, CACHE));
   }
 });
 
@@ -183,7 +184,7 @@ async function handleNavigation(event) {
   }
 }
 
-/** Caché primero con relleno desde la red. */
+/** Caché primero con relleno desde la red. Para lo inmutable (fuentes, iconos). */
 async function cacheFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
@@ -200,6 +201,38 @@ async function cacheFirst(request, cacheName) {
     // Si hay una copia antigua con otra clave, se intenta
     const fallback = await caches.match(request);
     if (fallback) return fallback;
+    throw err;
+  }
+}
+
+/**
+ * Red primero, con la caché como red de seguridad. Para el código y los estilos
+ * de la propia aplicación.
+ *
+ * POR QUÉ: con «caché primero» y sin paso de compilación, cambiar un `.js` sin
+ * subir la versión de la caché deja al navegador sirviendo el archivo viejo
+ * indefinidamente, y el síntoma es de los peores: la app arranca, se ve bien y
+ * un botón «no hace nada», porque el manejador que falta está en el archivo
+ * nuevo que nunca se descarga. Pasó exactamente eso.
+ *
+ * Yendo a la red primero, un archivo cambiado se ve en la siguiente recarga
+ * (sin tocar versiones) y sin conexión se sigue sirviendo la copia guardada, que
+ * es lo que pide una app local-first. El coste es que sin conexión se espera a
+ * que falle la red antes de tirar de caché; a cambio, nunca se sirve código
+ * viejo con código nuevo.
+ */
+async function networkFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+
+  try {
+    const response = await fetch(request);
+    if (response && response.ok && (response.type === 'basic' || response.type === 'cors')) {
+      cache.put(request, response.clone()).catch(() => {});
+    }
+    return response;
+  } catch (err) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
     throw err;
   }
 }

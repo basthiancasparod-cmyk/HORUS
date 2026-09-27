@@ -138,6 +138,9 @@ function setCommitVisible(visible, label = 'Importar al cuadrante') {
   const button = byId('import-commit');
   button.hidden = !visible;
   button.textContent = label;
+  // Si una importación anterior dejó el botón bloqueado, se recupera aquí: un
+  // botón deshabilitado que nadie vuelve a habilitar es un «no hace nada».
+  button.disabled = false;
 }
 
 /* ------------------------------------------------------------------ *
@@ -1068,10 +1071,20 @@ async function editCell(person, date, currentTypeCode) {
  * ------------------------------------------------------------------ */
 
 async function commit() {
-  const monthKey = chosenMonth || parseResult?.monthKey;
-  if (!monthKey) return;
-
   const button = byId('import-commit');
+  const monthKey = chosenMonth || parseResult?.monthKey;
+
+  // Sin mes no se puede importar nada, pero callarse es lo peor que se puede
+  // hacer: el usuario pulsa y «no pasa nada». Se dice por qué.
+  if (!monthKey) {
+    notify.warning('Todavía no hay un mes elegido. Elige el mes del cuadrante y vuelve a intentarlo.');
+    return;
+  }
+  if (!parseResult?.ok) {
+    notify.warning('Todavía no se ha leído ningún cuadrante. Elige primero el archivo.');
+    return;
+  }
+
   button.disabled = true;
   const original = button.textContent;
   button.textContent = 'Importando…';
@@ -1089,27 +1102,36 @@ async function commit() {
 
     const result = mod.commitImportedEntries(liveCtx().store, entries, { year, month });
 
-    closeDialog(dialog);
+    // Cerrar y avisar es cosmético: si fallara, el cuadrante YA está importado.
+    // Por eso va en su propio try, para no convertir un éxito en un error.
+    try {
+      closeDialog(dialog);
 
-    if (!result?.imported) {
-      notify.warning('No se ha importado ningún turno. Revisa los códigos asignados.');
-      return;
+      if (!result?.imported) {
+        notify.warning('No se ha importado ningún turno. Revisa los códigos asignados.');
+        return;
+      }
+
+      // El resumen que devuelve el motor es { imported, members, skipped, reasons }.
+      // Antes se leía `membersCreated`, que no existe: nunca se decía cuántas
+      // personas nuevas se habían creado.
+      notify.success(
+        `${result.imported} turno(s) de ${formatMonth(monthKey)} importados`
+        + (result.members ? ` · ${result.members} persona(s) nueva(s)` : ''),
+        { duration: 6000, action: { label: 'Deshacer', onClick: () => liveCtx().undo() } },
+      );
+
+      if (result.skipped) {
+        setTimeout(() => notify.info(`${result.skipped} turno(s) se han omitido por no tener tipo asignado.`), 900);
+      }
+
+      // Llevar la vista al mes importado para comprobarlo
+      const { setFocusDate, invalidate } = await import('./context.js');
+      setFocusDate(`${monthKey}-01`);
+      invalidate();
+    } catch (err) {
+      console.error('[import] el cuadrante se ha importado, pero falló el aviso posterior:', err);
     }
-
-    notify.success(
-      `${result.imported} turno(s) de ${formatMonth(monthKey)} importados`
-      + (result.membersCreated ? ` · ${result.membersCreated} persona(s) nueva(s)` : ''),
-      { duration: 6000, action: { label: 'Deshacer', onClick: () => liveCtx().undo() } },
-    );
-
-    if (result.skipped) {
-      setTimeout(() => notify.info(`${result.skipped} turno(s) se han omitido por no tener tipo asignado.`), 900);
-    }
-
-    // Llevar la vista al mes importado para comprobarlo
-    const { setFocusDate, invalidate } = await import('./context.js');
-    setFocusDate(`${monthKey}-01`);
-    invalidate();
   } catch (err) {
     console.error('[import] no se pudo importar:', err);
     notify.error(`No se pudo importar: ${err.message}`);

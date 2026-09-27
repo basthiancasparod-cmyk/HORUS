@@ -730,7 +730,10 @@ export function createSyncEngine(deps) {
    * @param {{full?:boolean, silent?:boolean}} [opts]
    */
   async function sync({ full = false, silent = false } = {}) {
-    if (running) return lastResult;
+    // Si ya hay una sincronización en marcha se devuelve la última conocida. OJO:
+    // en la primerísima sincronización `lastResult` todavía es null, y devolver
+    // null hacía que quien llama (app.js) reventara al leer `result.pushed`.
+    if (running) return lastResult ?? { skipped: true, reason: 'already-running' };
     if (!isSignedIn()) {
       setStatus(STATUS.offline, null);
       return { skipped: true, reason: 'no-session' };

@@ -445,6 +445,173 @@ await it('commitImportedEntries aguanta una lista vacía sin romper', () => {
 });
 
 /* ==================================================================== *
+ * 5. El botón, de verdad
+ *
+ * Esto faltaba y por eso se pudo colar: se probaba el motor de importación,
+ * pero nadie pulsaba el botón del diálogo. Lo que el usuario ve como «no hace
+ * nada» es justo este camino.
+ * ==================================================================== */
+
+describe('El botón de importar del diálogo');
+
+const { installDOM } = await import('./dom.mjs');
+const html = readFileSync(join(ROOT, 'index.html'), 'utf8');
+const env = installDOM(html);
+globalThis.window = env.window;
+
+const model2 = await import('../js/core/model.js');
+const contextMod = await import('../js/ui/context.js');
+const importUi = await import('../js/ui/import-review.js');
+
+/** Monta un contexto mínimo, como el de la aplicación. */
+function montarApp() {
+  const doc = model2.bootstrapDocument({ name: 'JAVIER', coworkers: [] });
+  doc.settings.firstRun = false;
+  const store = createStore(doc);
+  const ctx = {
+    doc: store.doc,
+    store,
+    subscribe: () => () => {},
+    scheduler: { inspect: () => ({}) },
+    auth: { currentUser: () => null, isSignedIn: () => false, signOut: async () => {} },
+    ui: {},
+    undo: () => store.undo(),
+    redo: () => store.redo(),
+    canUndo: () => store.canUndo(),
+    canRedo: () => store.canRedo(),
+    batch: (l, fn) => store.batch(l, fn),
+    navigate: (v) => { contextMod.setCurrentView(v); },
+    isLocalMode: () => true,
+    region: () => 'MD',
+    setRegion: () => {},
+    runSync: () => {},
+    showAuth: () => {},
+    signOut: async () => {},
+  };
+  contextMod.setContext(ctx);
+  return { store, ctx };
+}
+
+/** Un File de mentira con lo mínimo que usa el diálogo. */
+function archivoFalso(name, type, bytes) {
+  return {
+    name,
+    type,
+    size: bytes.length,
+    arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+  };
+}
+
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await it('el diálogo se abre y pinta la revisión con el PDF real', async () => {
+  env.reset();
+  const { store, ctx } = montarApp();
+  await importUi.openImportDialog(ctx, {
+    file: archivoFalso('cuadrante.pdf', 'application/pdf', bytes),
+  });
+
+  const boton = env.document.getElementById('import-commit');
+  ok(boton, 'existe el botón de importar');
+  is(boton.hidden, false, 'el botón se ve cuando hay algo que importar');
+  is(boton.disabled, false, 'el botón está habilitado');
+  ok(env.document.querySelectorAll('#import-body table.review tbody tr').length === 6,
+    'la revisión tiene una fila por persona');
+  is(store.doc.entries.length, 0, 'todavía no se ha tocado el cuadrante');
+});
+
+await it('pulsar el botón importa el cuadrante de verdad', async () => {
+  const { store } = montarApp();
+  await importUi.openImportDialog(ctxActual(), {
+    file: archivoFalso('cuadrante.pdf', 'application/pdf', bytes),
+  });
+
+  const boton = env.document.getElementById('import-commit');
+  boton.click();
+  for (let i = 0; i < 40 && !store.doc.entries.length; i++) await esperar(15);
+
+  ok(store.doc.entries.length > 100, `turnos importados: ${store.doc.entries.length}`);
+  is(store.canUndo(), true, 'la importación se puede deshacer');
+  is(boton.disabled, false, 'el botón vuelve a estar disponible');
+  ok(env.document.getElementById('dialog-import').open === false, 'el diálogo se cierra');
+
+  const avisos = env.document.getElementById('toasts').textContent;
+  ok(/importados/i.test(avisos), `se avisa al usuario: ${JSON.stringify(avisos.trim().slice(0, 120))}`);
+
+  store.undo();
+  is(store.doc.entries.length, 0, 'un solo deshacer lo revierte todo');
+});
+
+/** El contexto vivo que dejó montado `montarApp`. */
+function ctxActual() { return contextMod.getContext(); }
+
+await it('pulsar el botón sin cuadrante leído avisa en vez de callarse', async () => {
+  env.reset();
+  const { store, ctx } = montarApp();
+  await importUi.openImportDialog(ctx);
+
+  const boton = env.document.getElementById('import-commit');
+  boton.click();
+  await esperar(30);
+
+  is(store.doc.entries.length, 0, 'no se importa nada');
+  ok(/archivo|mes/i.test(env.document.getElementById('toasts').textContent),
+    'se explica por qué no se puede importar');
+});
+
+/**
+ * El camino exacto que falló en el navegador: hay códigos desconocidos, el
+ * usuario elige «Ignorar estos días» en el selector y DESPUÉS pulsa importar.
+ * Aquel gesto repinta toda la revisión, así que hay que comprobar que el botón
+ * sigue vivo y que la importación llega a término.
+ */
+await it('elegir «ignorar días» y luego importar funciona', async () => {
+  env.reset();
+  const { store, ctx } = montarApp();
+  await importUi.openImportDialog(ctx, {
+    file: archivoFalso('cuadrante.pdf', 'application/pdf', bytes),
+  });
+
+  const select = env.document.querySelector('#import-body select');
+  ok(select, 'el cuadrante de prueba trae códigos que hay que aclarar');
+
+  // «Ignorar estos días» es la opción vacía, la primera.
+  select.value = '';
+  select.dispatchEvent(new env.DOMEvent('change'));
+  await esperar(30);
+
+  const boton = env.document.getElementById('import-commit');
+  is(boton.hidden, false, 'el botón sigue visible tras repintar');
+  is(boton.disabled, false, 'el botón sigue habilitado tras repintar');
+
+  boton.click();
+  for (let i = 0; i < 40 && !store.doc.entries.length; i++) await esperar(15);
+
+  ok(store.doc.entries.length > 100,
+    `debe importar el resto del cuadrante: ${store.doc.entries.length}`);
+  ok(/importados/i.test(env.document.getElementById('toasts').textContent),
+    'se avisa de la importación');
+});
+
+await it('una casilla desconocida ignorada no se importa, pero el resto sí', async () => {
+  env.reset();
+  const { store, ctx } = montarApp();
+  await importUi.openImportDialog(ctx, {
+    file: archivoFalso('cuadrante.pdf', 'application/pdf', bytes),
+  });
+
+  const boton = env.document.getElementById('import-commit');
+  boton.click();
+  for (let i = 0; i < 40 && !store.doc.entries.length; i++) await esperar(15);
+
+  // AF no está en el catálogo y nadie lo ha mapeado: esos 3 días no entran,
+  // pero eso no puede impedir que entre el resto del mes.
+  const sinTipo = store.doc.entries.filter((e) => !e.typeId);
+  eq(sinTipo.length, 0, 'ninguna entrada se guarda sin tipo de turno');
+  ok(store.doc.entries.length >= 120, `turnos importados: ${store.doc.entries.length}`);
+});
+
+/* ==================================================================== *
  * Informe
  * ==================================================================== */
 
