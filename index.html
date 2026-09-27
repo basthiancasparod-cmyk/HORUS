@@ -302,20 +302,21 @@
            ================================================================ -->
       <section class="view is-active" id="view-today" data-view="today" aria-labelledby="view-title">
         <div class="now-card">
-          <div class="row-between" style="align-items:flex-start">
-            <div>
-              <div class="now-time" id="today-clock">--:--</div>
+          <div class="now-head">
+            <div class="now-time" id="today-clock">--:--</div>
+            <div class="now-meta">
               <div class="now-date" id="today-date">—</div>
-            </div>
-            <div class="text-right">
-              <div class="now-zone t-2xs t-upper t-muted" id="today-week">Semana —</div>
-              <div class="t-2xs t-muted" id="today-count"></div>
+              <div class="now-line">
+                <span class="now-zone" id="today-week">Semana —</span>
+                <span class="now-sep" aria-hidden="true">·</span>
+                <span class="now-zone" id="today-count"></span>
+              </div>
             </div>
           </div>
 
-          <div id="today-next" style="margin-top:var(--sp-4)"></div>
+          <div id="today-next" class="now-next"></div>
 
-          <div class="row wrap" style="margin-top:var(--sp-4);gap:var(--sp-2)">
+          <div class="now-actions">
             <button type="button" class="btn btn-primary btn-sm" id="today-edit">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
               Asignar turno
@@ -324,6 +325,14 @@
             <button type="button" class="btn btn-sm" id="today-portrait">Ver el día</button>
           </div>
         </div>
+
+        <section class="section" id="today-onduty-section">
+          <header>
+            <h2 class="t-md">De guardia ahora</h2>
+            <span class="badge" id="today-onduty-count">0</span>
+          </header>
+          <div class="onduty-list" id="today-onduty"></div>
+        </section>
 
         <section class="section">
           <header>

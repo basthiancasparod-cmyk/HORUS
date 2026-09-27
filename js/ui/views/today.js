@@ -12,14 +12,14 @@ import {
   DOW_SHORT, formatShortDate, minToTime,
 } from '../../core/date.js';
 import {
-  analyzeDate, nextShift, upcomingShifts,
+  analyzeDate, nextShift, upcomingShifts, whoIsNow,
 } from '../../core/coverage.js';
 import { getContext, registerRenderer, getFocusDate, setFocusDate, invalidate } from '../context.js';
 import {
-  emptyState, avatar, typeBadge, notify,
+  emptyState, avatar, typeBadge, notify, progressBar,
 } from '../toolkit.js';
 import { memberById } from '../../core/model.js';
-import { openAssignDialog } from '../dialogs.js';
+import { openAssignDialog, minLabel } from '../dialogs.js';
 
 export const VIEW = 'today';
 
@@ -37,6 +37,8 @@ export function mount(ctx) {
     week: byId('today-week'),
     count: byId('today-count'),
     next: byId('today-next'),
+    onduty: byId('today-onduty'),
+    ondutyCount: byId('today-onduty-count'),
     mine: byId('today-mine'),
     conflictsSection: byId('today-conflicts-section'),
     conflicts: byId('today-conflicts'),
@@ -122,6 +124,9 @@ function render() {
   /* ---------- Tu próximo turno (lo principal) ---------- */
   paintNext(doc, ctx);
 
+  /* ---------- De guardia ahora ---------- */
+  paintOnDuty(doc);
+
   /* ---------- Tus próximos turnos ---------- */
   paintMine(doc, ctx);
 
@@ -170,21 +175,22 @@ function paintNext(doc, ctx) {
   const soon = minutes <= 120;
   const isMine = !!mine;
 
-  const card = el('div', { class: 'next-card' }, [
+  const card = el('div', { class: `next-card ${isMine ? 'is-mine' : 'is-team'}` }, [
     avatar(target.member, { size: 'md' }),
     el('div', { class: 'grow', style: { minWidth: '0' } }, [
-      el('div', { class: 't-2xs t-upper t-muted' }, isMine ? 'Eres tú' : 'Próximo turno del equipo'),
-      el('div', { class: 't-md t-semibold' }, [
-        target.member?.name || 'Alguien',
-        target.type ? ` · ${target.type.label}` : '',
-      ].join('')),
+      el('div', { class: 'next-label' }, isMine ? 'Tu próximo turno' : 'Próximo turno del equipo'),
+      el('div', { class: 'next-who' }, [
+        el('span', { class: 'next-name' }, target.member?.name || 'Alguien'),
+        isMine ? el('span', { class: 'badge badge-accent next-me' }, 'Eres tú') : null,
+        target.type ? el('span', { class: 'next-type' }, target.type.label) : null,
+      ]),
       el('div', { class: 't-xs t-dim' }, [
         formatBlocks([target.block]),
         crossesMidnight(target.block) ? ' (cruza medianoche)' : '',
         target.entry?.notes ? ` · ${target.entry.notes}` : '',
       ].join('')),
     ]),
-    el('div', { class: 'text-right shrink-0' }, [
+    el('div', { class: 'next-when' }, [
       el('div', { class: 'countdown' }, formatRelative(minutes * 60000).replace(/^en /, 'en ')),
       el('div', { class: 't-2xs t-muted' }, formatClock(new Date(target.startsAt))),
     ]),
@@ -194,6 +200,65 @@ function paintNext(doc, ctx) {
     card.style.animation = 'pulse-soft 2.4s var(--ease-in-out) infinite';
   }
   box.appendChild(card);
+}
+
+/* ------------------------------------------------------------------ *
+ * De guardia ahora
+ * ------------------------------------------------------------------ */
+
+function paintOnDuty(doc) {
+  const box = refs.onduty;
+  clear(box);
+
+  const now = new Date();
+  const onDuty = whoIsNow(doc, now);
+  refs.ondutyCount.textContent = String(onDuty.length);
+
+  if (!onDuty.length) {
+    box.appendChild(el('div', { class: 'onduty-empty' }, [
+      el('span', { class: 'onduty-empty-icon' }, icon('moon', 18)),
+      el('div', { class: 'grow' }, [
+        el('div', { class: 't-sm t-semibold' }, 'Nadie de guardia ahora mismo'),
+        el('div', { class: 'field-hint' }, nextOnDutyHint(doc, now)),
+      ]),
+    ]));
+    return;
+  }
+
+  for (const duty of onDuty) {
+    const color = duty.type?.hex || duty.member?.hex || 'var(--accent)';
+    box.appendChild(el('div', {
+      class: 'onduty-item',
+      style: { '--type-color': color },
+    }, [
+      avatar(duty.member, { size: 'sm' }),
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'who' }, [
+          el('span', { class: 'onduty-name' }, duty.member?.name || 'Alguien'),
+          duty.member?.id && duty.member.id === doc.meId
+            ? el('span', { class: 'badge badge-accent' }, 'Eres tú')
+            : null,
+          duty.continued ? el('span', { class: 'badge' }, 'desde ayer') : null,
+        ]),
+        el('div', { class: 'what' }, [
+          duty.type ? duty.type.label : 'Turno',
+          ` · ${minLabel(duty.start)}–${duty.end >= 1440 ? 'mañana ' : ''}${minLabel(duty.end)}`,
+        ].join('')),
+        progressBar(Math.round(duty.progress * 100), 100, {
+          className: 'shift-progress',
+          label: `Progreso del turno de ${duty.member?.name || ''}`,
+        }),
+      ]),
+      el('div', { class: 'left' }, formatDuration(duty.minutesLeft)),
+    ]));
+  }
+}
+
+function nextOnDutyHint(doc, now) {
+  const upcoming = upcomingShifts(doc, { from: now, limit: 1 });
+  if (!upcoming.length) return 'No hay más turnos en el cuadrante.';
+  const minutes = Math.round((upcoming[0].startMs - now.getTime()) / 60000);
+  return `El siguiente turno empieza ${formatRelative(minutes * 60000)} (${upcoming[0].member?.name || 'alguien'}).`;
 }
 
 /* ------------------------------------------------------------------ *

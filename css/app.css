@@ -1554,24 +1554,122 @@ table.review .col-name .member-name { font-size: var(--fs-sm); font-weight: 600;
 a.btn { text-decoration: none; }
 
 /* ==========================================================================
+   Vista HOY — cabecera, próximo turno y guardia
+   ========================================================================== */
+
+/* Cabecera: reloj grande y, debajo, fecha y semana. En móvil ya no se apelotona
+   todo en una esquina, porque no hay dos columnas compitiendo por el ancho. */
+.now-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2) var(--sp-4);
+}
+
+.now-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.now-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.now-sep { color: var(--text-muted); }
+
+.now-next { margin-top: var(--sp-4); }
+
+.now-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+/* Tarjeta del próximo turno: la tuya manda; la del equipo es secundaria. */
+.next-card.is-mine {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, transparent);
+}
+
+.next-card.is-team {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.next-card .next-label {
+  font-size: var(--fs-2xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.next-card.is-mine .next-label { color: var(--accent); }
+
+.next-card .next-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: 2px;
+}
+
+.next-card .next-name {
+  font-size: var(--fs-md);
+  font-weight: 700;
+}
+
+.next-card .next-me { flex-shrink: 0; }
+
+.next-card .next-type {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+
+.next-card .next-when {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+}
+
+/* Guardia: estado vacío y nombre con distintivo */
+.onduty-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.onduty-empty-icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border-radius: var(--r-md);
+}
+
+.onduty-item .who { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); }
+.onduty-item .onduty-name { font-size: var(--fs-md); font-weight: 600; }
+
+/* ==========================================================================
    Responsive / Móvil — Estilos base "mobile first"
    ========================================================================== */
 
 /* Tamaño base de fuente y línea para legibilidad en móvil */
 @media (max-width: 599px) {
-  :root {
-    --fs-xs: 0.65rem;
-    --fs-sm: 0.8125rem;
-    --fs-md: 0.9375rem;
-    --fs-lg: 1.125rem;
-    --fs-xl: 1.25rem;
-    --fs-2xl: 1.5rem;
-    --sp-1: 0.25rem;
-    --sp-2: 0.5rem;
-    --sp-3: 0.75rem;
-    --sp-4: 1rem;
-  }
-
   /* Área táctil mínima 44×44px para todo lo clicable */
   button, .btn, .list-item.is-clickable, .chip, .select,
   [role="button"], [role="tab"], [type="checkbox"], [type="radio"] {
@@ -1654,17 +1752,30 @@ a.btn { text-decoration: none; }
   .stat-value { font-size: var(--fs-xl); }
   .stat-label { font-size: var(--fs-2xs); color: var(--text-muted); }
 
-  /* Tarjeta de próximo turno (next-card) */
+  /* Tarjeta de próximo turno: apilada y alineada a la izquierda (centrada
+     quedaba raro, porque es una tarjeta de datos, no un mensaje). */
   .next-card {
     flex-direction: column;
-    align-items: stretch;
-    text-align: center;
-    gap: var(--sp-3);
+    align-items: flex-start;
+    gap: var(--sp-2);
     padding: var(--sp-4);
   }
   .next-card > .grow { min-width: 0; width: 100%; }
-  .next-card .avatar { margin: 0 auto; }
-  .next-card .countdown { font-size: var(--fs-xl); margin: var(--sp-2) 0; }
+  .next-card .next-when {
+    align-items: flex-start;
+    width: 100%;
+    margin-top: var(--sp-1);
+  }
+  .next-card .countdown { font-size: var(--fs-xl); }
+  .next-card .avatar { margin: 0; }
+
+  /* Cabecera de Hoy: el reloj manda y la fecha va debajo */
+  .now-card { padding: var(--sp-4); }
+  .now-card .now-time { font-size: var(--fs-3xl); }
+  .now-head { gap: var(--sp-1); }
+  .now-meta { width: 100%; }
+  .now-actions { margin-top: var(--sp-3); }
+  .now-actions .btn { flex: 1 1 auto; justify-content: center; }
 
   /* Tarjetas de turno en lista (paintMine) */
   .list-item .badge { flex-shrink: 0; }
@@ -1694,11 +1805,6 @@ a.btn { text-decoration: none; }
   .roster-wrap, .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .roster table { min-width: 100%; }
 
-  /* Avatar en móvil */
-  .avatar { width: 36px; height: 36px; font-size: var(--fs-sm); }
-  .avatar-sm { width: 28px; height: 28px; }
-  .avatar-lg { width: 40px; height: 40px; }
-
   /* Botones en footer de diálogo: apilados en móvil */
   .dialog-footer { flex-direction: column; gap: var(--sp-2); }
   .dialog-footer .btn { width: 100%; justify-content: center; }
@@ -1706,12 +1812,6 @@ a.btn { text-decoration: none; }
 
 /* Tabletas y pantallas intermedias */
 @media (min-width: 600px) and (max-width: 899px) {
-  :root {
-    --fs-xs: 0.6875rem;
-    --fs-sm: 0.8125rem;
-    --fs-md: 0.9375rem;
-    --fs-lg: 1.125rem;
-  }
   .next-card { flex-direction: row; align-items: center; text-align: left; }
   .next-card > .grow { width: auto; min-width: 0; text-align: left; }
   .next-card .avatar { margin: 0; }
@@ -1719,19 +1819,6 @@ a.btn { text-decoration: none; }
   .next-card { text-align: left; align-items: center; }
   .grid-3, .grid-2 { grid-template-columns: repeat(2, 1fr); }
   .dialog-panel { max-width: 520px; margin: auto; border-radius: var(--r-lg); }
-}
-
-/* Desktop: a partir de 900px ya están los estilos base */
-@media (min-width: 900px) {
-  /* Los estilos base ya están pensados para desktop */
-  :root {
-    --fs-xs: 0.625rem;
-    --fs-sm: 0.75rem;
-    --fs-md: 0.875rem;
-    --fs-lg: 1rem;
-    --fs-xl: 1.125rem;
-    --fs-2xl: 1.5rem;
-  }
 }
 
 /* ==========================================================================
