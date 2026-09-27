@@ -369,9 +369,17 @@ const assignState = {
 
 /**
  * Abre el diálogo de asignación.
+ *
+ * `skipExisting` («No sobrescribir») es una red de seguridad para las
+ * operaciones en LOTE: rellenar un rango entero con un patrón no debería pisar
+ * lo que ya hay. Pero cuando el preset fija UN día y UN miembro —que es lo que
+ * pasa al tocar una casilla del cuadrante para corregirla— sobrescribir ES la
+ * intención del usuario. Con el valor por defecto, corregir un turno equivocado
+ * no hacía nada y encima el aviso no explicaba por qué: un callejón sin salida.
+ *
  * @param {object} ctx
  * @param {{date?:string, memberIds?:string[], typeId?:string|null, entryId?:string|null,
- *          rangeMode?:boolean, dates?:string[]}} [preset]
+ *          rangeMode?:boolean, dates?:string[], skipExisting?:boolean}} [preset]
  */
 export function openAssignDialog(ctx, preset = {}) {
   const { actions } = ctx;
@@ -382,7 +390,10 @@ export function openAssignDialog(ctx, preset = {}) {
   assignState.dates = preset.dates?.length ? [...preset.dates] : [baseDate];
   assignState.rangeMode = !!preset.rangeMode;
   assignState.until = preset.until || addDays(baseDate, 6);
-  assignState.skipExisting = preset.skipExisting !== false;
+  // Es una corrección puntual (un día, una persona) si no se dice lo contrario.
+  const correccionPuntual = !preset.rangeMode && assignState.dates.length === 1
+    && (preset.memberIds?.length === 1);
+  assignState.skipExisting = preset.skipExisting ?? !correccionPuntual;
   assignState.notes = preset.notes || '';
   assignState.memberIds = new Set(preset.memberIds?.length ? preset.memberIds : [ctx.doc.meId].filter(Boolean));
   assignState.typeId = preset.typeId ?? null;
@@ -546,7 +557,7 @@ export function openAssignDialog(ctx, preset = {}) {
   renderWeekdays();
   updateAssignSummary();
 
-  byId('form-assign').onsubmit = (event) => {
+  byId('form-assign').onsubmit = async (event) => {
     event.preventDefault();
     if (!assignState.memberIds.size) { notify.error('Elige al menos una persona.'); return; }
     const dates = targetDates();
@@ -559,10 +570,13 @@ export function openAssignDialog(ctx, preset = {}) {
     const label = type ? type.label : 'Sin turno';
 
     let changed = 0;
+    let yaTenían = 0;
     ctx.batch(`asignar ${label}`, () => {
       for (const date of dates) {
         for (const memberId of memberIds) {
-          if (assignState.skipExisting && ctx.doc.entries.some((e) => e.memberId === memberId && e.date === date)) {
+          const ocupado = ctx.doc.entries.some((e) => e.memberId === memberId && e.date === date);
+          if (assignState.skipExisting && ocupado) {
+            yaTenían++;
             continue;
           }
           const ok = actions.setEntry({ memberId, date, typeId, notes: notes || undefined });
@@ -571,10 +585,34 @@ export function openAssignDialog(ctx, preset = {}) {
       }
     });
 
-    if (!changed) {
-      notify.warning(assignState.skipExisting
-        ? 'No se cambió nada: esos días ya tenían turno.'
-        : 'No había nada que cambiar.');
+    /* Si no se cambió nada PORQUE los días ya tenían turno, no se deja al usuario
+       mirando un aviso que no explica nada: se le ofrece reemplazarlos ahí mismo.
+       Antes salía «No se cambió nada: esos días ya tenían turno» y ahí se acababa
+       todo, sin decir que el interruptor «No sobrescribir» era el culpable. */
+    if (!changed && yaTenían) {
+      const ok = await confirmAction({
+        title: 'Esos días ya tienen turno',
+        message: `${yaTenían} día(s) ya tenían turno y está activado «No sobrescribir». `
+          + `¿Quieres reemplazarlos por «${label}»?`,
+        confirmLabel: 'Reemplazar',
+        danger: true,
+      });
+      if (!ok) return;
+
+      ctx.batch(`reemplazar ${label}`, () => {
+        for (const date of dates) {
+          for (const memberId of memberIds) {
+            const ok2 = actions.setEntry({ memberId, date, typeId, notes: notes || undefined });
+            if (ok2) changed++;
+          }
+        }
+      });
+      if (!changed) {
+        notify.warning('No había nada que reemplazar.');
+        return;
+      }
+    } else if (!changed) {
+      notify.warning('No había nada que cambiar.');
       return;
     }
 

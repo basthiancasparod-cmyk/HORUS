@@ -669,6 +669,52 @@ it('el diálogo de asignación se abre y asigna a varias personas', () => {
   is(dialog.open, false, 'se cerró');
 });
 
+it('corregir una casilla que ya tiene turno sí la cambia', () => {
+  // Este es el fallo que dejaba al usuario sin salida: al tocar una casilla del
+  // cuadrante el diálogo traía «No sobrescribir» activado, así que la corrección
+  // no hacía nada y el aviso no explicaba por qué.
+  const store = storeMod.createStore(oneDayDoc());
+  const ctx = mountAll(store);
+  const entrada = store.doc.entries[0];
+  const antes = entrada.typeId;
+
+  dialogs.openAssignDialog(ctx, { date: entrada.date, memberIds: [entrada.memberId] });
+  const chips = [...env.document.getElementById('assign-types').querySelectorAll('.chip')];
+  ok(chips.length > 1, 'hay más de un tipo de turno');
+  // El catálogo por defecto empieza por Mañana, que es el que ya tiene ese día.
+  const otro = chips.find((c) => !/Mañana/.test(c.textContent));
+  ok(otro, 'hay otro tipo de turno que elegir');
+  otro.click();
+  env.document.getElementById('form-assign').requestSubmit();
+
+  const despues = store.doc.entries.find((e) => e.date === entrada.date && e.memberId === entrada.memberId);
+  ok(despues.typeId !== antes, 'el turno de ese día se ha corregido de verdad');
+  is(store.doc.entries.length, 1, 'y no se ha duplicado la casilla');
+});
+
+it('en lote sigue sin pisar lo que ya hay (la red de seguridad se mantiene)', () => {
+  const store = storeMod.createStore(oneDayDoc());
+  const ctx = mountAll(store);
+  const entrada = store.doc.entries[0];
+  const antes = entrada.typeId;
+
+  // Sin memberIds: es una asignación en lote, así que «No sobrescribir» sigue puesto.
+  dialogs.openAssignDialog(ctx, { date: entrada.date });
+  const chips = [...env.document.getElementById('assign-types').querySelectorAll('.chip')];
+  const otro = chips.find((c) => !/Mañana/.test(c.textContent));
+  ok(otro, 'hay otro tipo de turno que elegir');
+  otro.click();
+  env.document.getElementById('form-assign').requestSubmit();
+
+  const despues = store.doc.entries.find((e) => e.date === entrada.date && e.memberId === entrada.memberId);
+  is(despues.typeId, antes, 'en lote no se ha pisado el turno existente');
+
+  // Y en vez de un callejón sin salida, se ofrece reemplazar.
+  const confirmacion = env.document.getElementById('dialog-confirm');
+  ok(confirmacion?.open, 'se pregunta si reemplazar en lugar de no hacer nada');
+  env.document.getElementById('confirm-cancel')?.click();
+});
+
 it('el diálogo de asignación en rango respeta los días marcados', () => {
   const store = storeMod.createStore(oneDayDoc());
   const ctx = mountAll(store);
