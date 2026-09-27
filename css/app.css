@@ -703,6 +703,78 @@
 }
 
 /* ==========================================================================
+   VISTA: CALENDARIO — semana (una tarjeta por día, de lunes a domingo)
+   ========================================================================== */
+
+.week-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.week-card {
+  display: block;
+  width: 100%;
+  padding: var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  text-align: left;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.week-card:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.week-card.is-today { border-color: var(--accent); }
+.week-card.is-holiday { background: var(--warning-soft); }
+.week-card.is-weekend { background: color-mix(in srgb, var(--surface-2) 50%, var(--surface)); }
+
+.week-card .week-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
+}
+
+.week-card .day-meta { text-align: center; min-width: 30px; }
+.week-card .day-num {
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.week-card .day-dow {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.week-card .week-date { font-size: var(--fs-sm); font-weight: 600; }
+.week-card .week-coverage { font-size: var(--fs-2xs); }
+.week-card .week-coverage.is-ok { color: var(--success); }
+.week-card .week-coverage.is-gap { color: var(--warning); }
+.week-card .week-coverage.is-empty { color: var(--danger); }
+
+.week-card .day-flags {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.week-card .week-shifts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+/* El título del periodo puede ser un rango («Semana del 6 al 12 de octubre»):
+   ahí no interesa la capitalización palabra a palabra. */
+.month-nav .month-title.is-range { text-transform: none; }
+
+/* ==========================================================================
    VISTA: CUADRANTE (rejilla personas × días)
    ========================================================================== */
 

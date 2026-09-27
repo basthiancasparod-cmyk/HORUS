@@ -1,17 +1,26 @@
 /**
  * HORUS — js/ui/views/calendar.js
  * Vista «Calendario»: el mes en rejilla (una casilla por día, con las barras de
- * turno y el punto de cobertura) y la lista de días con su línea de tiempo
- * de 24 h.
+ * turno y el punto de cobertura), la semana en tarjetas (una por día, de lunes
+ * a domingo) y la lista de días con su línea de tiempo de 24 h.
  *
  * Decisiones que no se ven en el contrato y conviene tener presentes:
  *
- *  - **El mes que se pinta se deriva siempre de la fecha en foco**
+ *  - **El periodo que se pinta se deriva siempre de la fecha en foco**
  *    (`getFocusDate()`), que comparten Calendario, Cuadrante y Horas. Así no hay
- *    dos «meses» distintos en la aplicación: pasar de mes es cambiar la fecha en
- *    foco, y si otra vista la cambia, el calendario la sigue.
- *  - **El modo (mes/lista) es estado local** de la vista. Al montar se toma la
- *    única pista que ofrece el contexto: `doc.settings.defaultView === 'list'`.
+ *    dos «meses» (ni dos semanas) distintos en la aplicación: pasar de mes o de
+ *    semana es cambiar la fecha en foco, y si otra vista la cambia, el
+ *    calendario la sigue.
+ *  - **El modo (mes/semana/lista) es estado local** de la vista. Al montar se
+ *    toma la única pista que ofrece el contexto: `doc.settings.defaultView === 'list'`.
+ *  - **La semana es la ISO**: lunes a domingo, la misma que numeran `isoWeek()`
+ *    y la que usan el Cuadrante y «Copiar semana». No sigue
+ *    `settings.weekStartsOn` a propósito: una «vista por semana» que empiece en
+ *    domingo no cuadra ni con el número de semana ni con el resto de la app.
+ *  - **Las tarjetas de la semana reutilizan los trozos del modo lista**
+ *    (`buildDayMeta`, `buildDayTrack`, `buildDayFlags`): así la fecha, los
+ *    turnos con su color y su horario y el estado de cobertura se cuentan
+ *    exactamente igual en los dos modos, sin dos verdades distintas.
  *  - **Texto de las barras de la casilla**: con una sola persona filtrada se
  *    muestra el código del turno (hay sitio y es lo útil); si no, las iniciales
  *    de la persona, que es lo que distingue una barra de otra en una casilla de
@@ -29,8 +38,8 @@
 import { byId, el, clear, icon, initials, readableOn } from '../../core/utils.js';
 import {
   todayKey, fromKey, dateKey, addDays, addMonths, daysInMonth, monthDays,
-  monthGrid, isoWeek, monthKeyOf, startOfWeek, formatMonth, formatLongDate,
-  formatHours, DOW_SHORT, MIN_PER_DAY,
+  monthGrid, weekDays, isoWeek, monthKeyOf, startOfWeek, formatMonth,
+  formatLongDate, formatHours, DOW_SHORT, MONTHS, MIN_PER_DAY,
 } from '../../core/date.js';
 import { analyzeDate, analyzeMonth } from '../../core/coverage.js';
 import {
@@ -47,8 +56,11 @@ export const VIEW = 'calendar';
  * ==================================================================== */
 
 let refs = null;              // referencias del DOM, cacheadas en mount()
-let mode = 'month';           // 'month' | 'list'
+let mode = 'month';           // 'month' | 'week' | 'list'
 let cellByDate = new Map();   // fecha → botón de la casilla (solo modo mes)
+
+/** Modos que admite el conmutador del calendario. */
+const MODES = ['month', 'week', 'list'];
 
 /** Cuántas casillas de turno caben en una celda del mes antes del «+N». */
 const MAX_BARS = 3;
@@ -66,6 +78,7 @@ export function mount(ctx) {
   refs = {
     ctx,
     monthBox: byId('calendar-month'),
+    weekBox: byId('calendar-week'),
     listBox: byId('calendar-list'),
     dow: byId('calendar-dow'),
     grid: byId('calendar-grid'),
@@ -90,29 +103,26 @@ export function mount(ctx) {
     clearBtn: null,
     panelSignature: '',
     dowSignature: '',
-    titleText: null,
   };
-
-  // `#calendar-title` ya trae "—<small id="calendar-subtitle">" en el HTML: se
-  // conserva el <small> y solo se cambia el nodo de texto del mes.
-  const firstChild = refs.title.firstChild;
-  refs.titleText = firstChild && firstChild.nodeType === 3 ? firstChild : document.createTextNode('');
-  if (refs.titleText !== firstChild) refs.title.insertBefore(refs.titleText, firstChild || null);
 
   // Modo inicial: primera pista disponible en los ajustes del documento.
   mode = ctx.doc.settings?.defaultView === 'list' ? 'list' : 'month';
 
-  /* --- Cableado único de listeners (nunca dentro de render) --- */
-  refs.prev.addEventListener('click', () => shiftMonth(-1));
-  refs.next.addEventListener('click', () => shiftMonth(1));
-  refs.todayBtn.addEventListener('click', goToday);
-  refs.exportBtn.addEventListener('click', exportMonth);
-  refs.filterBtn.addEventListener('click', toggleFilterPanel);
-  refs.grid.addEventListener('click', onGridClick);
-  refs.grid.addEventListener('keydown', onGridKeydown);
-  refs.days.addEventListener('click', onListClick);
+  /* --- Cableado único de listeners (nunca dentro de render) ---
+   * Se asignan propiedades `on…` en lugar de `addEventListener` para que el
+   * montaje sea reentrante: volver a montar la vista (las pruebas lo hacen)
+   * reemplaza el manejador en vez de acumular uno nuevo por montaje. */
+  refs.prev.onclick = () => shiftPeriod(-1);
+  refs.next.onclick = () => shiftPeriod(1);
+  refs.todayBtn.onclick = goToday;
+  refs.exportBtn.onclick = exportPeriod;
+  refs.filterBtn.onclick = toggleFilterPanel;
+  refs.grid.onclick = onGridClick;
+  refs.grid.onkeydown = onGridKeydown;
+  refs.days.onclick = onListClick;
+  refs.weekBox.onclick = onWeekClick;
   for (const button of refs.modeButtons) {
-    button.addEventListener('click', () => setMode(button.dataset.calendarMode));
+    button.onclick = () => setMode(button.dataset.calendarMode);
   }
 
   buildFilterPanel(ctx.doc);
@@ -134,37 +144,88 @@ export function render() {
   const monthKey = monthKeyOf(focus);
   const today = todayKey();
   const fs = resolveFilters(doc);
-  const days = monthDays(monthKey);
 
-  // Un solo análisis del mes visible; los días de fuera de mes se analizan
-  // bajo demanda en renderMonth (son como mucho 11).
-  const analyses = new Map(analyzeMonth(doc, monthKey).map((a) => [a.date, a]));
-  const stats = monthStats(days, analyses, fs);
+  // Días visibles: la semana ISO (lunes a domingo) o el mes natural.
+  const days = mode === 'week' ? weekDays(focus) : monthDays(monthKey);
+
+  // Un solo análisis del periodo visible. En modo mes se analiza el mes entero
+  // (los días de fuera de mes de la rejilla se analizan bajo demanda en
+  // renderMonth, son como mucho 11); en modo semana, los siete días, que pueden
+  // caer en dos meses distintos.
+  const analyses = new Map();
+  if (mode === 'month') {
+    for (const analysis of analyzeMonth(doc, monthKey)) analyses.set(analysis.date, analysis);
+  } else {
+    for (const key of days) analyses.set(key, analyzeDate(doc, key));
+  }
+
+  const stats = periodStats(days, analyses, fs);
 
   applyMode();
-  paintHeader(monthKey, stats);
-  paintFilterState(doc, fs, countHidden(doc, monthKey, fs));
+  paintHeader({ mode, monthKey, days }, stats);
+  paintFilterState(doc, fs, countHidden(doc, days, fs));
 
   if (mode === 'month') renderMonth(doc, monthKey, { focus, today, fs, analyses });
-  else renderList(doc, monthKey, { today, fs, analyses, days });
+  else if (mode === 'week') renderWeek(doc, days, { today, fs, analyses });
+  else renderList(doc, { today, fs, analyses, days });
 }
 
 /** Enseña el contenedor del modo activo y sincroniza el conmutador. */
 function applyMode() {
   refs.monthBox.hidden = mode !== 'month';
+  refs.weekBox.hidden = mode !== 'week';
   refs.listBox.hidden = mode !== 'list';
   for (const button of refs.modeButtons) {
     button.setAttribute('aria-pressed', String(button.dataset.calendarMode === mode));
   }
+  // Las flechas mueven un mes o una semana según el modo: que lo diga también
+  // quien use lector de pantalla.
+  const step = mode === 'week' ? 'Semana' : 'Mes';
+  refs.prev.setAttribute('aria-label', `${step} anterior`);
+  refs.next.setAttribute('aria-label', `${step} siguiente`);
 }
 
-/** Título ("Junio 2025") y subtítulo (horas del equipo y días con huecos). */
-function paintHeader(monthKey, stats) {
-  refs.titleText.nodeValue = formatMonth(monthKey);
+/** Título del periodo y subtítulo (horas del equipo y días con huecos). */
+function paintHeader(period, stats) {
+  const isWeek = period.mode === 'week';
+  const last = period.days[period.days.length - 1];
+  const text = isWeek ? weekRangeLabel(period.days[0], last) : formatMonth(period.monthKey);
+
+  // `#calendar-title` trae el <small id="calendar-subtitle"> en el HTML: se
+  // conserva y solo se reemplaza el nodo de texto del periodo.
+  const small = refs.subtitle;
+  clear(refs.title);
+  refs.title.appendChild(document.createTextNode(text));
+  if (small) refs.title.appendChild(small);
+  // El CSS del título aplica `text-transform: capitalize`; en modo semana eso
+  // dejaría «Semana Del 6 Al 12 De Octubre», así que ahí se desactiva.
+  refs.title.classList.toggle('is-range', isWeek);
+
   const gaps = stats.gapDays
     ? `${stats.gapDays} ${stats.gapDays === 1 ? 'día con huecos' : 'días con huecos'}`
     : 'sin huecos de cobertura';
-  refs.subtitle.textContent = `${formatHours(stats.totalMinutes)} del equipo · ${gaps}`;
+  if (small) small.textContent = `${formatHours(stats.totalMinutes)} del equipo · ${gaps}`;
+}
+
+/**
+ * «Semana del 6 al 12 de octubre». Si la semana cruza de mes se nombran los dos
+ * meses, y si cruza de año, también los dos años.
+ */
+function weekRangeLabel(startKey, endKey) {
+  const from = fromKey(startKey);
+  const to = fromKey(endKey);
+  if (!from || !to) return `Semana del ${startKey} al ${endKey}`;
+
+  const startMonth = MONTHS[from.getMonth()].toLowerCase();
+  const endMonth = MONTHS[to.getMonth()].toLowerCase();
+
+  if (from.getFullYear() !== to.getFullYear()) {
+    return `Semana del ${from.getDate()} de ${startMonth} de ${from.getFullYear()} al ${to.getDate()} de ${endMonth} de ${to.getFullYear()}`;
+  }
+  if (from.getMonth() !== to.getMonth()) {
+    return `Semana del ${from.getDate()} de ${startMonth} al ${to.getDate()} de ${endMonth}`;
+  }
+  return `Semana del ${from.getDate()} al ${to.getDate()} de ${endMonth}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -228,11 +289,13 @@ function paintDowHeader(weekStart) {
   refs.dowSignature = String(weekStart);
   clear(refs.dow);
   for (let i = 0; i < 7; i++) {
+    // `dow` es el día real (0 = domingo) porque la rejilla empieza en
+    // `weekStart`; `DOW_SHORT` empieza en lunes, así que hay que girar el índice.
     const dow = (weekStart + i) % 7;
     refs.dow.appendChild(el('span', {
       class: dow === 0 || dow === 6 ? 'is-weekend' : null,
       'aria-hidden': 'true',
-    }, DOW_SHORT[dow]));
+    }, DOW_SHORT[(dow + 6) % 7]));
   }
 }
 
@@ -322,10 +385,109 @@ function paintLegend(types) {
 }
 
 /* ------------------------------------------------------------------ *
+ * Modo semana
+ * ------------------------------------------------------------------ */
+
+/**
+ * La semana ISO que contiene la fecha en foco: siete tarjetas de día, de lunes
+ * a domingo, con la misma información que una fila del modo lista (fecha,
+ * turnos con su tipo y su horario, y estado de cobertura).
+ */
+function renderWeek(doc, days, { today, fs, analyses }) {
+  clear(refs.weekBox);
+
+  if (!doc.members.length) {
+    refs.weekBox.appendChild(emptyState({
+      iconName: 'users',
+      title: 'Todavía no hay nadie en el equipo',
+      message: 'Añade personas para poder repartir turnos en el calendario.',
+      action: { label: 'Ir a Equipo', onClick: () => refs.ctx.navigate('team') },
+    }));
+    return;
+  }
+
+  const now = new Date();
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+  const singleMember = !!fs.memberIds && fs.memberIds.size === 1;
+  const infos = days.map((key) => dayInfo(analyses.get(key), fs));
+
+  // Etiqueta de la semana con su número ISO y las horas visibles del equipo.
+  const minutes = infos.reduce(
+    (total, info) => total + info.work.reduce((sum, p) => sum + (p.end - p.start), 0),
+    0,
+  );
+  refs.weekBox.appendChild(el('div', {
+    class: 'section-label',
+    style: { margin: 'var(--sp-2) 0 var(--sp-1)' },
+  }, `Semana ${isoWeek(days[0]).week} · ${formatHours(minutes)}`));
+
+  for (let i = 0; i < days.length; i++) {
+    refs.weekBox.appendChild(buildWeekCard(days[i], infos[i], { today, nowMinutes, singleMember }));
+  }
+}
+
+/**
+ * Tarjeta de un día de la semana. La fecha, la línea de tiempo y los chivatos
+ * son los mismos nodos que en el modo lista (`buildDayMeta`, `buildDayTrack`,
+ * `buildDayFlags`); lo único propio es la cabecera con la fecha larga y el
+ * detalle escrito de cada turno, que en una tarjeta ancha sí cabe.
+ */
+function buildWeekCard(key, info, { today, nowMinutes, singleMember }) {
+  const dt = fromKey(key);
+  const dow = dt ? dt.getDay() : 1;
+  const isToday = key === today;
+
+  const classes = ['week-card'];
+  if (isToday) classes.push('is-today');
+  if (info.holiday) classes.push('is-holiday');
+  else if (dow === 0 || dow === 6) classes.push('is-weekend');
+
+  const head = el('div', { class: 'week-head' }, [
+    buildDayMeta(key),
+    el('div', { class: 'grow' }, [
+      el('div', { class: 'week-date' }, formatLongDate(key)),
+      el('div', { class: `week-coverage ${coverageClass(info.status)}` }, coverageTitle(info)),
+    ]),
+    buildDayFlags(info),
+  ]);
+
+  const shifts = el('div', { class: 'week-shifts' });
+  if (info.projections.length) {
+    for (const projection of info.projections) {
+      const hex = projection.type?.hex || projection.member?.hex || '#8A93A8';
+      shifts.appendChild(el('span', {
+        class: 'chip',
+        style: { '--chip-color': hex },
+        title: projectionTitle(projection),
+      }, [
+        el('span', { class: 'dot' }),
+        projection.member?.name || 'Alguien',
+        el('span', { class: 't-2xs t-muted' }, projectionSchedule(projection)),
+      ]));
+    }
+  } else {
+    shifts.appendChild(el('span', { class: 't-2xs t-muted' }, 'Sin turnos asignados'));
+  }
+
+  return el('button', {
+    type: 'button',
+    class: classes.join(' '),
+    dataset: { date: key },
+    title: daySummary(key, info),
+    'aria-label': dayAriaLabel(key, info),
+    'aria-current': isToday ? 'date' : null,
+  }, [
+    head,
+    buildDayTrack(key, info, { today, nowMinutes, singleMember }),
+    shifts,
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
  * Modo lista
  * ------------------------------------------------------------------ */
 
-function renderList(doc, monthKey, { today, fs, analyses, days }) {
+function renderList(doc, { today, fs, analyses, days }) {
   clear(refs.axis);
   clear(refs.days);
 
@@ -381,17 +543,45 @@ function renderList(doc, monthKey, { today, fs, analyses, days }) {
 }
 
 /** Una fila de día: meta, línea de tiempo de 24 h y chivatos. */
-function buildDayRow(key, info, { today, nowMinutes, singleMember }) {
+function buildDayRow(key, info, opts) {
   const dt = fromKey(key);
   const dow = dt ? dt.getDay() : 1;
-  const isToday = key === today;
-  const isWeekend = dow === 0 || dow === 6;
+  const isToday = key === opts.today;
 
   const classes = ['day-row'];
   if (isToday) classes.push('is-today');
   if (info.holiday) classes.push('is-holiday');
-  else if (isWeekend) classes.push('is-weekend');
+  else if (dow === 0 || dow === 6) classes.push('is-weekend');
 
+  return el('button', {
+    type: 'button',
+    class: classes.join(' '),
+    dataset: { date: key },
+    title: daySummary(key, info),
+    'aria-label': dayAriaLabel(key, info),
+    'aria-current': isToday ? 'date' : null,
+  }, [
+    buildDayMeta(key),
+    buildDayTrack(key, info, opts),
+    buildDayFlags(info),
+  ]);
+}
+
+/**
+ * Número del día y su inicial. `DOW_SHORT` empieza en lunes y `getDay()` en
+ * domingo, así que hay que girar el índice.
+ */
+function buildDayMeta(key) {
+  const dt = fromKey(key);
+  const dow = dt ? dt.getDay() : 1;
+  return el('div', { class: 'day-meta' }, [
+    el('div', { class: 'day-num' }, String(dt ? dt.getDate() : Number(key.slice(8)))),
+    el('div', { class: 'day-dow' }, DOW_SHORT[(dow + 6) % 7]),
+  ]);
+}
+
+/** Línea de tiempo de 24 h con los huecos, los turnos y la hora actual. */
+function buildDayTrack(key, info, { today, nowMinutes, singleMember }) {
   const track = el('div', { class: 'day-track' });
 
   // Un día entero en rayado cuando no hay ningún turno es ruido: los huecos
@@ -420,7 +610,7 @@ function buildDayRow(key, info, { today, nowMinutes, singleMember }) {
     }, el('span', { class: 'block-label' }, projectionLabel(projection, singleMember))));
   }
 
-  if (isToday) {
+  if (key === today) {
     track.appendChild(el('div', {
       class: 'now-line',
       style: { left: percent(nowMinutes) },
@@ -428,6 +618,11 @@ function buildDayRow(key, info, { today, nowMinutes, singleMember }) {
     }));
   }
 
+  return track;
+}
+
+/** Chivatos del día: festivo, notas y estado de cobertura (verde/ámbar/rojo). */
+function buildDayFlags(info) {
   const flags = el('div', { class: 'day-flags' });
   if (info.holiday) {
     const isEvent = info.meta?.dayType === 'event';
@@ -453,22 +648,7 @@ function buildDayRow(key, info, { today, nowMinutes, singleMember }) {
   } else {
     flags.appendChild(el('span', { class: 'badge badge-success', title: 'Cobertura completa' }, icon('check', 11)));
   }
-
-  return el('button', {
-    type: 'button',
-    class: classes.join(' '),
-    dataset: { date: key },
-    title: daySummary(key, info),
-    'aria-label': dayAriaLabel(key, info),
-    'aria-current': isToday ? 'date' : null,
-  }, [
-    el('div', { class: 'day-meta' }, [
-      el('div', { class: 'day-num' }, String(dt ? dt.getDate() : Number(key.slice(8)))),
-      el('div', { class: 'day-dow' }, DOW_SHORT[dow]),
-    ]),
-    track,
-    flags,
-  ]);
+  return flags;
 }
 
 /* ==================================================================== *
@@ -645,18 +825,28 @@ function filterLabel(doc, raw) {
  * ==================================================================== */
 
 function setMode(next) {
-  const value = next === 'list' ? 'list' : 'month';
+  const value = MODES.includes(next) ? next : 'month';
   if (value === mode) return;
   mode = value;
   render();
 }
 
-/** Cambia de mes conservando el día del mes cuando existe en el mes destino. */
-function shiftMonth(delta, { focusCell: wantFocus = false } = {}) {
+/**
+ * Mueve el periodo visible: en modo semana, siete días; en mes y lista, un mes
+ * conservando el día del mes cuando existe en el mes destino.
+ */
+function shiftPeriod(delta, { focusCell: wantFocus = false } = {}) {
   const focus = getFocusDate() || todayKey();
-  const month = addMonths(monthKeyOf(focus), delta);
-  const day = Math.min(Number(focus.slice(8, 10)) || 1, daysInMonth(month));
-  const target = dateKey(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, day);
+  let target;
+
+  if (mode === 'week') {
+    target = addDays(focus, delta * 7);
+  } else {
+    const month = addMonths(monthKeyOf(focus), delta);
+    const day = Math.min(Number(focus.slice(8, 10)) || 1, daysInMonth(month));
+    target = dateKey(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 1, day);
+  }
+
   setFocusDate(target);
   render();
   if (wantFocus) focusCell(target);
@@ -667,15 +857,22 @@ function goToday() {
   render();
 }
 
-function exportMonth() {
+/** Exporta justo el periodo que se está viendo (el mes o la semana). */
+function exportPeriod() {
   const ctx = getContext();
-  const days = monthDays(monthKeyOf(getFocusDate() || todayKey()));
+  const days = visibleDays();
   const fs = resolveFilters(ctx.doc);
   openExportDialog(ctx, {
     from: days[0],
     to: days[days.length - 1],
     presetMemberIds: fs.memberIds ? [...fs.memberIds] : null,
   });
+}
+
+/** Los días que pinta el modo activo: la semana ISO o el mes natural del foco. */
+function visibleDays() {
+  const focus = getFocusDate() || todayKey();
+  return mode === 'week' ? weekDays(focus) : monthDays(monthKeyOf(focus));
 }
 
 function onGridClick(event) {
@@ -691,6 +888,15 @@ function onListClick(event) {
   const row = event.target.closest?.('.day-row');
   if (!row) return;
   const key = row.dataset.date;
+  setFocusDate(key);
+  openDayEditor(refs.ctx, key);
+}
+
+/** Tocar una tarjeta de la semana abre el editor de ese día, como en el mes. */
+function onWeekClick(event) {
+  const card = event.target.closest?.('.week-card');
+  if (!card) return;
+  const key = card.dataset.date;
   setFocusDate(key);
   openDayEditor(refs.ctx, key);
 }
@@ -713,9 +919,9 @@ function onGridKeydown(event) {
   if (ARROW_STEP[event.key]) {
     moveFocus(addDays(key, ARROW_STEP[event.key]));
   } else if (event.key === 'PageUp' || event.key === '[' || event.code === 'BracketLeft') {
-    shiftMonth(-1, { focusCell: true });
+    shiftPeriod(-1, { focusCell: true });
   } else if (event.key === 'PageDown' || event.key === ']' || event.code === 'BracketRight') {
-    shiftMonth(1, { focusCell: true });
+    shiftPeriod(1, { focusCell: true });
   } else if (event.key === 'Home') {
     moveFocus(startOfWeek(key, weekStart));
   } else if (event.key === 'End') {
@@ -839,8 +1045,8 @@ function gapsOf(work) {
   return gaps;
 }
 
-/** Horas del equipo y días con huecos del mes visible, ya filtrado. */
-function monthStats(days, analyses, fs) {
+/** Horas del equipo y días con huecos del periodo visible, ya filtrado. */
+function periodStats(days, analyses, fs) {
   let totalMinutes = 0;
   let gapDays = 0;
   for (const key of days) {
@@ -851,12 +1057,13 @@ function monthStats(days, analyses, fs) {
   return { totalMinutes, gapDays };
 }
 
-/** Entradas que empiezan en el mes visible y el filtro deja fuera. */
-function countHidden(doc, monthKey, fs) {
+/** Entradas que empiezan en los días visibles y el filtro deja fuera. */
+function countHidden(doc, days, fs) {
   if (!fs.active) return 0;
+  const visible = new Set(days);
   let hidden = 0;
   for (const entry of doc.entries) {
-    if (monthKeyOf(entry.date) !== monthKey) continue;
+    if (!visible.has(entry.date)) continue;
     if (!entryVisible(entry, fs)) hidden++;
   }
   return hidden;
@@ -884,6 +1091,14 @@ function projectionTitle(projection) {
     parts.push('sin horario');
   }
   return parts.join(' · ');
+}
+
+/** "Mañana · 08:30–17:00 (+1 día)" o "Vacaciones · todo el día". */
+function projectionSchedule(projection) {
+  const what = projection.type?.label || 'Turno suelto';
+  if (!projection.isWork) return `${what} · todo el día`;
+  const when = `${timeLabel(projection.start)}–${timeLabel(projection.end)}`;
+  return `${what} · ${when}${projection.continuesNextDay ? ' · +1 día' : ''}`;
 }
 
 /** "Ana 08:30–17:00" — resumen compacto para el `title` de la casilla. */

@@ -3,9 +3,10 @@
  * Vista CUADRANTE: la rejilla personas × días (el "cuadrante" de toda la vida).
  *
  * Es la vista insignia del producto: una fila por persona y una columna por día
- * del mes en foco, con el total de horas de cada persona a la derecha y una
- * franja de cobertura al pie. Toda la información se lee de un vistazo y
- * cualquier casilla se puede tocar para asignar o cambiar el turno.
+ * del periodo en foco (el mes entero o solo la semana), con el total de horas de
+ * cada persona a la derecha y una franja de cobertura al pie. Toda la
+ * información se lee de un vistazo y cualquier casilla se puede tocar para
+ * asignar o cambiar el turno.
  *
  * Decisiones de integración (ver docs/VIEW-CONTRACT.md):
  *  - `mount(ctx)` guarda las referencias del DOM y cablea los listeners UNA sola
@@ -15,6 +16,15 @@
  *  - Nunca se usa `innerHTML` con datos del documento: todo con `el()`.
  *  - Ningún `document` se toca en el nivel superior del módulo: el módulo se
  *    puede importar en Node (pruebas) sin DOM.
+ *
+ * Modos de periodo:
+ *  - `month` (por defecto): todos los días del mes en foco.
+ *  - `week`: solo los siete días de la semana ISO (lunes a domingo) que
+ *    contiene la fecha en foco. La tabla se construye con **los mismos**
+ *    `paintHead`/`paintBody`/`paintFoot`, solo cambia la lista de días, así que
+ *    los totales, los conflictos y la franja de cobertura siempre corresponden a
+ *    lo que se está viendo. La semana es la ISO y no sigue
+ *    `settings.weekStartsOn` para cuadrar con `isoWeek()` y con «Copiar semana».
  *
  * Atajos de ratón/tacto:
  *  - Casilla de turno        → asignar o cambiar el turno de esa persona ese día.
@@ -30,14 +40,14 @@ import {
   copyToClipboard, clamp,
 } from '../../core/utils.js';
 import {
-  monthDays, monthKeyOf, todayKey, addDays, addMonths, daysInMonth,
-  formatMonth, isoWeek, DOW_SHORT, normalizeBlocks, timeToMin,
+  monthDays, monthKeyOf, todayKey, addDays, addMonths, weekDays, formatShortDate,
+  formatMonth, isoWeek, DOW_SHORT, MONTHS, normalizeBlocks, timeToMin,
 } from '../../core/date.js';
 import {
   entryBlocks, entryType, entryMinutes, entryIsWork,
 } from '../../core/model.js';
 import {
-  analyzeMonth, summarizeMonth, findConflicts,
+  analyzeRange, summarize, summarizeMonth, findConflicts,
 } from '../../core/coverage.js';
 import * as exporter from '../../core/exporter.js';
 import {
@@ -61,6 +71,12 @@ let dom = null;
 /** Mes que se está pintando ahora mismo ("YYYY-MM"). */
 let shownMonth = null;
 
+/** Periodo pintado: "YYYY-MM" en modo mes o el lunes de la semana en modo semana. */
+let shownPeriod = null;
+
+/** Modo del periodo visible: 'month' (por defecto) o 'week'. */
+let mode = 'month';
+
 /** Estado del arrastre en curso (ratón). */
 const dragState = { entryId: null, originCell: null, cell: null };
 
@@ -74,6 +90,8 @@ const dragState = { entryId: null, originCell: null, cell: null };
  */
 export function mount(ctx) {
   void ctx;
+
+  const view = byId('view-roster');
 
   dom = {
     sub: byId('roster-sub'),
@@ -93,7 +111,11 @@ export function mount(ctx) {
     copyweek: byId('roster-copyweek'),
     holiday: byId('roster-holiday'),
     import: byId('roster-import'),
+    modeButtons: view ? [...view.querySelectorAll('[data-roster-mode]')] : [],
   };
+
+  // Al montar se vuelve al mes: es el modo por defecto de la vista.
+  mode = 'month';
 
   // Si no hay fecha en foco, el cuadrante arranca en el mes de hoy. Se hace
   // aquí (y no al importar el módulo) para no tocar el estado compartido antes
@@ -103,11 +125,11 @@ export function mount(ctx) {
   wireStaticControls();
   wireTableInteractions();
 
-  // El calendario y el cuadrante comparten fecha: si el foco cambia de mes,
-  // hay que repintar. Dentro del mismo mes no hace falta (no cambia la rejilla).
+  // El calendario y el cuadrante comparten fecha: si el foco cambia de periodo
+  // visible (de mes, o de semana), hay que repintar. Dentro del mismo periodo
+  // no hace falta (no cambia la rejilla).
   onFocusDateChange(() => {
-    const month = focusMonth();
-    if (month !== shownMonth) invalidate(VIEW);
+    if (periodKey() !== shownPeriod) invalidate(VIEW);
   });
 
   registerRenderer(VIEW, render);
@@ -122,6 +144,23 @@ function focusMonth() {
   return monthKeyOf(getFocusDate() ?? todayKey());
 }
 
+/** Los días que pinta el modo activo: la semana ISO o el mes natural del foco. */
+function focusDays() {
+  const focus = getFocusDate() ?? todayKey();
+  return mode === 'week' ? weekDays(focus) : monthDays(monthKeyOf(focus));
+}
+
+/** Clave del periodo visible: "YYYY-MM" o el lunes de la semana en foco. */
+function periodKey() {
+  const focus = getFocusDate() ?? todayKey();
+  return mode === 'week' ? weekDays(focus)[0] : monthKeyOf(focus);
+}
+
+/** Etiqueta del periodo para los textos ("este mes" / "esta semana"). */
+function periodLabel() {
+  return mode === 'week' ? 'esta semana' : 'este mes';
+}
+
 /* ==================================================================== *
  * Cableado de los controles estáticos
  * ==================================================================== */
@@ -129,19 +168,32 @@ function focusMonth() {
 function wireStaticControls() {
   if (!dom) return;
 
-  if (dom.prev) dom.prev.onclick = () => shiftMonth(-1);
-  if (dom.next) dom.next.onclick = () => shiftMonth(1);
+  if (dom.prev) dom.prev.onclick = () => shiftPeriod(-1);
+  if (dom.next) dom.next.onclick = () => shiftPeriod(1);
+
+  // El conmutador de periodo (mes/semana) es estado local de la vista.
+  for (const button of dom.modeButtons) {
+    button.onclick = () => setMode(button.dataset.rosterMode);
+  }
 
   if (dom.copy) {
     dom.copy.onclick = async () => {
       try {
         const doc = getContext().doc;
-        const text = exporter.monthToText(doc, focusMonth(), {});
+        // Se copia justo lo que se está viendo: el mes entero o la semana.
+        const text = mode === 'week'
+          ? weekToText(doc, focusDays())
+          : exporter.monthToText(doc, focusMonth(), {});
         const ok = await copyToClipboard(text);
-        if (ok) notify.success('Cuadrante del mes copiado. Pégalo donde quieras.');
-        else notify.error('No se pudo copiar. Selecciona el texto y cópialo a mano.');
+        if (ok) {
+          notify.success(mode === 'week'
+            ? 'Cuadrante de la semana copiado. Pégalo donde quieras.'
+            : 'Cuadrante del mes copiado. Pégalo donde quieras.');
+        } else {
+          notify.error('No se pudo copiar. Selecciona el texto y cópialo a mano.');
+        }
       } catch (err) {
-        console.error('[cuadrante] no se pudo generar el texto del mes:', err);
+        console.error('[cuadrante] no se pudo generar el texto del periodo:', err);
         notify.error('No se pudo preparar el cuadrante para copiar.');
       }
     };
@@ -160,12 +212,57 @@ function wireStaticControls() {
   if (dom.import) dom.import.onclick = () => getContext().openImport();
 }
 
-/** Mueve el mes en foco `delta` meses y repinta. */
-function shiftMonth(delta) {
-  const month = addMonths(focusMonth(), delta);
-  // Se ancla al día 1 para que el mes mostrado sea siempre el pedido.
-  setFocusDate(`${month}-01`);
+/** Cambia el modo de periodo y repinta en el acto. */
+function setMode(next) {
+  const value = next === 'week' ? 'week' : 'month';
+  if (value === mode) return;
+  mode = value;
+  render();
+}
+
+/**
+ * Mueve el periodo en foco `delta` pasos: una semana (siete días) en modo
+ * semana y un mes en modo mes.
+ */
+function shiftPeriod(delta) {
+  if (mode === 'week') {
+    setFocusDate(addDays(getFocusDate() ?? todayKey(), delta * 7));
+  } else {
+    const month = addMonths(focusMonth(), delta);
+    // Se ancla al día 1 para que el mes mostrado sea siempre el pedido.
+    setFocusDate(`${month}-01`);
+  }
   invalidate(VIEW);
+}
+
+/** Enseña en el conmutador y en las flechas qué periodo se está moviendo. */
+function applyMode() {
+  for (const button of dom.modeButtons) {
+    button.setAttribute('aria-pressed', String(button.dataset.rosterMode === mode));
+  }
+  const step = mode === 'week' ? 'Semana' : 'Mes';
+  if (dom.prev) dom.prev.setAttribute('aria-label', `${step} anterior`);
+  if (dom.next) dom.next.setAttribute('aria-label', `${step} siguiente`);
+}
+
+/**
+ * Cuadrante de una semana en texto plano, para «Copiar».
+ *
+ * Se intenta primero `exporter.rangeToText`, que es el formato canónico de un
+ * rango. Hoy ese exportador revienta siempre (`rangeToText` usa
+ * `formatShortDate` sin importarlo desde `core/date.js`, algo que no se ve
+ * porque el error queda dentro del `try` de la vista de exportación), y
+ * `js/core/exporter.js` no está entre los archivos que esta tarea puede tocar.
+ * Mientras siga así, la semana se compone con `dayToText`, que sí funciona:
+ * una cabecera con el rango y un bloque por día.
+ */
+function weekToText(doc, days) {
+  try {
+    return exporter.rangeToText(doc, { from: days[0], to: days[days.length - 1] });
+  } catch {
+    const header = `📅 ${formatShortDate(days[0])} → ${formatShortDate(days[days.length - 1])} — ${doc.name}`;
+    return [header, '', ...days.map((day) => exporter.dayToText(doc, day))].join('\n');
+  }
 }
 
 /* ==================================================================== *
@@ -305,8 +402,10 @@ export function render() {
   const doc = ctx.doc;
   const month = focusMonth();
   shownMonth = month;
+  shownPeriod = mode === 'week' ? weekDays(getFocusDate() ?? todayKey())[0] : month;
 
-  const days = monthDays(month);
+  // El mes o la semana: lo único que cambia entre modos es esta lista de días.
+  const days = focusDays();
   const from = days[0];
   const to = days[days.length - 1];
   const today = todayKey();
@@ -317,11 +416,12 @@ export function render() {
   const conflicts = conflictIndex(doc, from, to);
   const filters = getFilters();
 
-  paintSubtitle(doc, month);
+  applyMode();
+  paintSubtitle(doc, days);
 
   paintHead(days, today, members.length);
   paintBody({ doc, days, today, members, entriesByDate, totals, conflicts, filters });
-  paintFoot(doc, month, days);
+  paintFoot(doc, days);
   paintLegend(doc, ctx);
 }
 
@@ -329,26 +429,67 @@ export function render() {
  * Cabecera: título, subtítulo y controles
  * ------------------------------------------------------------------ */
 
-function paintSubtitle(doc, month) {
+function paintSubtitle(doc, days) {
+  const isWeek = mode === 'week';
+
   if (dom.title) {
     // Se conserva el <small id="roster-subtitle"> que ya está en el HTML.
     const small = dom.title.querySelector('small');
     clear(dom.title);
-    dom.title.appendChild(document.createTextNode(formatMonth(month)));
+    dom.title.appendChild(document.createTextNode(
+      isWeek ? weekRangeLabel(days[0], days[days.length - 1]) : formatMonth(shownMonth),
+    ));
     if (small) dom.title.appendChild(small);
     else dom.title.appendChild(el('small', { id: 'roster-subtitle' }));
+    // El título del CSS va en `capitalize`; en modo semana eso dejaría
+    // «Semana Del 6 Al 12 De Octubre». Aquí se desactiva esa transformación.
+    dom.title.classList.toggle('is-range', isWeek);
   }
 
   const subtitle = byId('roster-subtitle');
   if (subtitle) {
-    const summary = summarizeMonth(doc, month);
+    const summary = isWeek
+      ? summarize(doc, { from: days[0], to: days[days.length - 1] })
+      : summarizeMonth(doc, shownMonth);
     const people = doc.members.filter((m) => m.active).length;
     subtitle.textContent = `${formatHours(summary.totalMinutes)} de trabajo · ${people} ${people === 1 ? 'persona' : 'personas'}`;
   }
 
   if (dom.sub) {
-    dom.sub.textContent = 'Todas las personas y todos los días, de un vistazo. Toca una casilla para asignar el turno.';
+    dom.sub.textContent = isWeek
+      ? 'Los siete días de la semana en foco. Toca una casilla para asignar el turno.'
+      : 'Todas las personas y todos los días, de un vistazo. Toca una casilla para asignar el turno.';
   }
+}
+
+/**
+ * «Semana del 6 al 12 de octubre». Si la semana cruza de mes se nombran los dos
+ * meses, y si cruza de año, también los dos años. (Mismo texto que el
+ * Calendario; se repite aquí para no crear una dependencia entre vistas.)
+ */
+function weekRangeLabel(startKey, endKey) {
+  const from = parseKey(startKey);
+  const to = parseKey(endKey);
+  if (!from || !to) return `Semana del ${startKey} al ${endKey}`;
+
+  const startMonth = MONTHS[from.getMonth()].toLowerCase();
+  const endMonth = MONTHS[to.getMonth()].toLowerCase();
+
+  if (from.getFullYear() !== to.getFullYear()) {
+    return `Semana del ${from.getDate()} de ${startMonth} de ${from.getFullYear()} al ${to.getDate()} de ${endMonth} de ${to.getFullYear()}`;
+  }
+  if (from.getMonth() !== to.getMonth()) {
+    return `Semana del ${from.getDate()} de ${startMonth} al ${to.getDate()} de ${endMonth}`;
+  }
+  return `Semana del ${from.getDate()} al ${to.getDate()} de ${endMonth}`;
+}
+
+/** Fecha local a medianoche, o `null` si la clave no es válida. */
+function parseKey(key) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return null;
+  const dt = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
 /* ------------------------------------------------------------------ *
@@ -381,7 +522,11 @@ function paintHead(days, today, memberCount) {
     ]));
   }
 
-  row.appendChild(el('th', { class: 'col-total', scope: 'col', title: 'Horas del mes' }, 'Total'));
+  row.appendChild(el('th', {
+    class: 'col-total',
+    scope: 'col',
+    title: mode === 'week' ? 'Horas de la semana' : 'Horas del mes',
+  }, 'Total'));
   dom.head.appendChild(row);
 }
 
@@ -432,14 +577,14 @@ function paintBody({ doc, days, today, members, entriesByDate, totals, conflicts
       }));
     }
 
-    row.appendChild(paintTotalCell(member, totals.get(member.id) ?? 0));
+    row.appendChild(paintTotalCell(member, totals.get(member.id) ?? 0, days));
     fragment.appendChild(row);
   }
 
   dom.body.appendChild(fragment);
 }
 
-/** Cabecera de fila: avatar, nombre y horas del mes. */
+/** Cabecera de fila: avatar, nombre y horas del periodo visible. */
 function paintRowHead(doc, member, minutes) {
   const inactive = member.active === false;
   const line = el('span', { class: 'member-line' }, [
@@ -452,7 +597,7 @@ function paintRowHead(doc, member, minutes) {
     class: `col-name ${inactive ? 'is-inactive' : ''}`.trim(),
     scope: 'row',
     'data-member-id': member.id,
-    title: `${member.name} · ${formatDuration(minutes)} este mes. Pulsa para editar la persona.`,
+    title: `${member.name} · ${formatDuration(minutes)} ${periodLabel()}. Pulsa para editar la persona.`,
     style: inactive ? { opacity: '0.55' } : null,
   }, [
     line,
@@ -595,14 +740,14 @@ function pillTitle(member, type, blocks, work, entry) {
   return `${member.name}: ${what} (${time})${notes}`;
 }
 
-/** Última columna: horas del mes, en rojo si se pasa del objetivo. */
-function paintTotalCell(member, minutes) {
-  const target = monthlyTarget(member);
+/** Última columna: horas del periodo visible, en rojo si se pasa del objetivo. */
+function paintTotalCell(member, minutes, days) {
+  const target = periodTarget(member, days);
   const over = target != null && target > 0 && minutes > target;
   return el('td', {
     class: `col-total ${over ? 't-danger' : ''}`.trim(),
     title: target == null
-      ? `${formatDuration(minutes)} este mes`
+      ? `${formatDuration(minutes)} ${periodLabel()}`
       : `${formatDuration(minutes)} de ${formatDuration(Math.round(target))} objetivo`,
   }, formatHours(minutes));
 }
@@ -611,10 +756,10 @@ function paintTotalCell(member, minutes) {
  * tfoot — franja de cobertura
  * ------------------------------------------------------------------ */
 
-function paintFoot(doc, month, days) {
+function paintFoot(doc, days) {
   clear(dom.foot);
 
-  const analysis = safeAnalyzeMonth(doc, month);
+  const analysis = safeAnalyzeDays(doc, days);
   const byDate = new Map(analysis.map((day) => [day.date, day]));
 
   const row = el('tr', {}, [
@@ -639,7 +784,7 @@ function paintFoot(doc, month, days) {
   dom.foot.appendChild(row);
 }
 
-/** Texto corto del hueco total del mes para la última celda del pie. */
+/** Texto corto del hueco total del periodo para la última celda del pie. */
 function summaryGapLabel(analysis) {
   const gap = analysis.reduce((a, d) => a + (d.gapMin || 0), 0);
   if (!gap) return '✓';
@@ -742,13 +887,20 @@ function minutesByMember(doc, days, members) {
   return out;
 }
 
-/** Objetivo mensual de una persona, escalando su jornada semanal. */
-function monthlyTarget(member) {
+/**
+ * Objetivo de horas del periodo visible, escalando la jornada semanal: en modo
+ * semana son las horas semanales, y en modo mes la parte proporcional del mes.
+ */
+function periodTarget(member, days) {
   const weekly = Number(member?.weeklyHours);
   if (!Number.isFinite(weekly) || weekly <= 0) return null;
+  return clamp((weekly * days.length) / 7, 0, 744);
+}
+
+/** Objetivo mensual de una persona, escalando su jornada semanal. */
+function monthlyTarget(member) {
   const month = shownMonth || focusMonth();
-  const dayCount = daysInMonth(month);
-  return clamp((weekly * dayCount) / 7, 0, 744);
+  return periodTarget(member, monthDays(month));
 }
 
 /** Mapa `miembro|fecha → conflicto` para marcar las casillas afectadas. */
@@ -767,13 +919,13 @@ function conflictIndex(doc, from, to) {
   return out;
 }
 
-/** `analyzeMonth` a prueba de documentos vacíos o raros. */
-function safeAnalyzeMonth(doc, month) {
+/** `analyzeRange` a prueba de documentos vacíos o raros. */
+function safeAnalyzeDays(doc, days) {
   try {
-    const list = analyzeMonth(doc, month);
+    const list = analyzeRange(doc, days[0], days[days.length - 1]);
     return Array.isArray(list) ? list : [];
   } catch (err) {
-    console.error('[cuadrante] el análisis de cobertura del mes falló:', err);
+    console.error('[cuadrante] el análisis de cobertura del periodo falló:', err);
     return [];
   }
 }
@@ -836,11 +988,16 @@ async function openCopyWeekDialog() {
     return;
   }
 
+  // En modo semana, la semana que se está viendo es la que se quiere copiar.
+  const visible = mode === 'week' ? focusDays()[0] : null;
+  const defaultFrom = Math.max(0, weeks.findIndex((w) => w.start === visible));
+  const defaultTo = defaultFrom === 0 ? 1 : 0;
+
   const options = weeks.map((w, i) => ({ value: String(i), label: w.label }));
   const fromSelect = el('select', { class: 'select', id: 'roster-copyweek-from' });
   const toSelect = el('select', { class: 'select', id: 'roster-copyweek-to' });
-  fillSelect(fromSelect, options, { selected: String(0) });
-  fillSelect(toSelect, options, { selected: String(1) });
+  fillSelect(fromSelect, options, { selected: String(defaultFrom) });
+  fillSelect(toSelect, options, { selected: String(defaultTo) });
 
   const extra = el('div', { class: 'stack-sm' }, [
     el('div', { class: 'field' }, [

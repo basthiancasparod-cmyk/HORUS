@@ -358,6 +358,7 @@
         <div class="row wrap" style="gap:var(--sp-2)">
           <div class="segmented" role="group" aria-label="Formato del calendario">
             <button type="button" data-calendar-mode="month" aria-pressed="true">Mes</button>
+            <button type="button" data-calendar-mode="week" aria-pressed="false">Semana</button>
             <button type="button" data-calendar-mode="list" aria-pressed="false">Lista</button>
           </div>
           <span class="grow"></span>
@@ -392,6 +393,9 @@
           <div class="row wrap" style="margin-top:var(--sp-3);gap:var(--sp-3)" id="calendar-legend"></div>
         </div>
 
+        <!-- Modo semana: los siete días de la semana en foco, de lunes a domingo -->
+        <div id="calendar-week" class="week-list" hidden></div>
+
         <!-- Modo lista -->
         <div id="calendar-list" hidden>
           <div class="timeline-axis" id="calendar-axis"></div>
@@ -409,6 +413,10 @@
             <p id="roster-sub">Todas las personas y todos los días, de un vistazo.</p>
           </div>
           <div class="row" style="gap:var(--sp-1)">
+            <div class="segmented" role="group" aria-label="Periodo del cuadrante">
+              <button type="button" data-roster-mode="month" aria-pressed="true">Mes</button>
+              <button type="button" data-roster-mode="week" aria-pressed="false">Semana</button>
+            </div>
             <button type="button" class="btn btn-sm" id="roster-copy">Copiar</button>
             <button type="button" class="btn btn-sm" id="roster-print">Imprimir</button>
           </div>

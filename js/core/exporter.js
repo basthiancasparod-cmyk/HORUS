@@ -16,7 +16,7 @@
 
 import {
   monthDays, formatMonth, formatLongDate, formatDuration,
-  addDays, timeToMin, blockMinutes, fromKey, toKey, DOW_FULL, stamp,
+  addDays, timeToMin, blockMinutes, fromKey, toKey, DOW_FULL, stamp, formatShortDate,
 } from './date.js';
 import {
   normalizeDocument, migrateFromLegacy, entryBlocks, entryType,

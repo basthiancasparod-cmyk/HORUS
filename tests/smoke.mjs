@@ -149,6 +149,7 @@ it('el bloque de importación con IA existe en Ajustes', () => {
 
 const storeMod = await import('../js/core/store.js');
 const model = await import('../js/core/model.js');
+const dateMod = await import('../js/core/date.js');
 const contextMod = await import('../js/ui/context.js');
 const toolkit = await import('../js/ui/toolkit.js');
 const dialogs = await import('../js/ui/dialogs.js');
@@ -550,6 +551,213 @@ it('cambiar entre modo mes y modo lista pinta ambos', () => {
     contextMod.renderCurrent();
   }
   ok(true);
+});
+
+/* ==================================================================== *
+ * 5-bis. Vista por semana (Calendario y Cuadrante)
+ *
+ * La semana es la ISO: la del 2025-06-15 (domingo) va del lunes 9 al domingo
+ * 15 de junio. Cada prueba monta su propio store, así que los modos vuelven a
+ * su valor por defecto (mes) en cada montaje.
+ * ==================================================================== */
+
+describe('Vista por semana');
+
+it('el calendario pinta los siete días de la semana y vuelve al mes', () => {
+  env.reset();
+  const store = storeMod.createStore(fullDoc());
+  mountAll(store);
+  contextMod.setFocusDate('2025-06-15');
+  contextMod.setCurrentView('calendar');
+  contextMod.renderCurrent();
+
+  const monthBox = env.document.getElementById('calendar-month');
+  const weekBox = env.document.getElementById('calendar-week');
+  const monthButton = env.document.querySelector('[data-calendar-mode="month"]');
+  const weekButton = env.document.querySelector('[data-calendar-mode="week"]');
+  ok(monthBox && weekBox, 'existen los contenedores de mes y de semana');
+  ok(weekButton, 'existe el botón «Semana»');
+  is(weekBox.hidden, true, 'la semana empieza oculta');
+
+  weekButton.click();
+  contextMod.renderCurrent();
+
+  is(weekBox.hidden, false, 'la semana se muestra');
+  is(monthBox.hidden, true, 'el mes se oculta');
+  is(weekButton.getAttribute('aria-pressed'), 'true', 'el botón «Semana» queda pulsado');
+  is(monthButton.getAttribute('aria-pressed'), 'false', 'el botón «Mes» se suelta');
+
+  const cards = weekBox.querySelectorAll('.week-card');
+  is(cards.length, 7, 'tarjetas de día de la semana');
+  is(cards[0].dataset.date, '2025-06-09', 'la semana empieza el lunes');
+  is(cards[6].dataset.date, '2025-06-15', 'y termina el domingo');
+
+  // Cada tarjeta lleva los turnos con su tipo y su horario, y el estado de
+  // cobertura, igual que una fila del modo lista. Salen más chips que personas
+  // porque el día también incluye la madrugada de los turnos de noche de ayer
+  // (que es justo lo que cuenta la cobertura).
+  const chips = cards[0].querySelectorAll('.week-shifts .chip');
+  ok(chips.length >= 5, `chips de turno ese día: ${chips.length}`);
+  ok([...chips].some((c) => /\d{2}:\d{2}–\d{2}:\d{2}/.test(c.textContent)),
+    `algún chip lleva el horario (${[...chips].map((c) => c.textContent).join(' | ')})`);
+  ok([...chips].some((c) => String(c.getAttribute('title')).includes('viene de ayer')),
+    'y aparece la continuación del turno de noche de ayer');
+  ok(cards[0].querySelector('.day-flags .badge'), 'la tarjeta lleva el estado de cobertura');
+
+  const title = env.document.getElementById('calendar-title').textContent;
+  ok(title.includes('Semana del 9 al 15 de junio'), `el título dice la semana (dice «${title}»)`);
+
+  // Tocar un día se comporta como en los demás modos: abre el editor del día.
+  cards[0].click();
+  const dayDialog = env.document.getElementById('dialog-day');
+  ok(dayDialog.open, 'la tarjeta de un día abre el editor del día');
+  dayDialog.close();
+  contextMod.renderCurrent();
+
+  // Exportar toma el periodo visible: la semana, no el mes entero.
+  env.document.getElementById('calendar-export').click();
+  const exportDialog = env.document.getElementById('dialog-export');
+  ok(exportDialog.open, 'el diálogo de exportación se abre');
+  is(env.document.getElementById('export-from').value, '2025-06-09', 'exporta desde el lunes');
+  is(env.document.getElementById('export-to').value, '2025-06-15', 'y hasta el domingo');
+  exportDialog.close();
+  contextMod.renderCurrent();
+
+  monthButton.click();
+  contextMod.renderCurrent();
+
+  is(weekBox.hidden, true, 'la semana se oculta');
+  is(monthBox.hidden, false, 'vuelve el mes');
+  ok(env.document.getElementById('calendar-grid').querySelectorAll('.month-cell').length >= 28,
+    'la rejilla del mes vuelve a pintarse');
+});
+
+it('en modo semana el calendario avanza exactamente siete días', () => {
+  env.reset();
+  const store = storeMod.createStore(fullDoc());
+  mountAll(store);
+  contextMod.setFocusDate('2025-06-15');
+  contextMod.setCurrentView('calendar');
+  env.document.querySelector('[data-calendar-mode="week"]').click();
+  contextMod.renderCurrent();
+
+  const before = contextMod.getFocusDate();
+  is(before, '2025-06-15', 'fecha de partida');
+
+  env.document.getElementById('calendar-next').click();
+  contextMod.renderCurrent();
+  is(contextMod.getFocusDate(), dateMod.addDays(before, 7), '«siguiente» avanza siete días');
+  is(contextMod.getFocusDate(), '2025-06-22', 'y cae en el día esperado');
+
+  env.document.getElementById('calendar-prev').click();
+  contextMod.renderCurrent();
+  is(contextMod.getFocusDate(), before, '«anterior» vuelve siete días atrás');
+
+  const cards = env.document.getElementById('calendar-week').querySelectorAll('.week-card');
+  is(cards[0].dataset.date, '2025-06-09', 'la semana pintada vuelve a empezar el lunes');
+  is(cards[6].dataset.date, '2025-06-15', 'y termina el domingo');
+});
+
+it('el cuadrante en modo semana pinta siete columnas y navega de siete en siete', () => {
+  env.reset();
+  const store = storeMod.createStore(fullDoc());
+  mountAll(store);
+  contextMod.setFocusDate('2025-06-15');
+  contextMod.setCurrentView('roster');
+  contextMod.renderCurrent();
+
+  const weekButton = env.document.querySelector('[data-roster-mode="week"]');
+  ok(weekButton, 'existe el botón «Semana» del cuadrante');
+  is(weekButton.getAttribute('aria-pressed'), 'false', 'el cuadrante empieza en mes');
+
+  weekButton.click();
+  contextMod.renderCurrent();
+
+  const head = env.document.getElementById('roster-head');
+  const cols = head.querySelectorAll('th.day-col');
+  is(cols.length, 7, 'siete columnas de día');
+  is(cols[0].dataset.date, '2025-06-09', 'de lunes');
+  is(cols[6].dataset.date, '2025-06-15', 'a domingo');
+  is(head.querySelectorAll('th').length, 9, 'columna de nombres + siete días + total');
+
+  const body = env.document.getElementById('roster-body');
+  is(body.querySelectorAll('tr').length, 5, 'una fila por persona');
+  is(body.querySelector('tr').querySelectorAll('td.shift-cell').length, 7, 'siete casillas por fila');
+
+  // El pie corresponde solo a los siete días visibles (más la celda del total).
+  is(env.document.getElementById('roster-foot').querySelectorAll('td').length, 8,
+    'siete celdas de cobertura + el total');
+
+  const title = env.document.getElementById('roster-title').textContent;
+  ok(title.includes('Semana del 9 al 15 de junio'), `el título dice la semana (dice «${title}»)`);
+
+  const before = contextMod.getFocusDate();
+  env.document.getElementById('roster-next').click();
+  contextMod.renderCurrent();
+  is(contextMod.getFocusDate(), dateMod.addDays(before, 7), '«siguiente» avanza siete días');
+  is(env.document.getElementById('roster-head').querySelectorAll('th.day-col')[0].dataset.date,
+    '2025-06-16', 'las columnas se han movido una semana');
+
+  env.document.getElementById('roster-prev').click();
+  contextMod.renderCurrent();
+  is(contextMod.getFocusDate(), before, '«anterior» vuelve siete días atrás');
+});
+
+await itAsync('en modo semana el cuadrante copia solo la semana visible', async () => {
+  env.reset();
+  const store = storeMod.createStore(fullDoc());
+  mountAll(store);
+  contextMod.setFocusDate('2025-06-15');
+  contextMod.setCurrentView('roster');
+  env.document.querySelector('[data-roster-mode="week"]').click();
+  contextMod.renderCurrent();
+
+  env.document.getElementById('roster-copy').click();
+  await sleep(20);
+
+  const text = env.window.__clipboard || '';
+  ok(text.includes('9 jun 2025') && text.includes('15 jun 2025'),
+    `el texto copiado abarca del 9 al 15 de junio (empieza: «${text.split('\n')[0]}»)`);
+  ok(!text.includes('16 jun 2025'), 'y no se sale de la semana visible por delante');
+  ok(!text.includes('8 jun 2025'), 'ni por detrás');
+});
+
+it('volver a modo mes deja el calendario y el cuadrante como estaban', () => {
+  env.reset();
+  const store = storeMod.createStore(fullDoc());
+  mountAll(store);
+  contextMod.setFocusDate('2025-06-15');
+
+  const weekCal = env.document.querySelector('[data-calendar-mode="week"]');
+  const monthCal = env.document.querySelector('[data-calendar-mode="month"]');
+  const weekRoster = env.document.querySelector('[data-roster-mode="week"]');
+  const monthRoster = env.document.querySelector('[data-roster-mode="month"]');
+
+  contextMod.setCurrentView('calendar');
+  weekCal.click();
+  contextMod.renderCurrent();
+  is(env.document.getElementById('calendar-week').querySelectorAll('.week-card').length, 7,
+    'el calendario pinta la semana');
+
+  contextMod.setCurrentView('roster');
+  weekRoster.click();
+  contextMod.renderCurrent();
+  is(env.document.getElementById('roster-head').querySelectorAll('th.day-col').length, 7,
+    'el cuadrante pinta la semana');
+
+  monthRoster.click();
+  contextMod.renderCurrent();
+  ok(env.document.getElementById('roster-head').querySelectorAll('th.day-col').length >= 28,
+    'el cuadrante vuelve al mes completo');
+  is(monthRoster.getAttribute('aria-pressed'), 'true', 'y el botón «Mes» queda pulsado');
+
+  contextMod.setCurrentView('calendar');
+  monthCal.click();
+  contextMod.renderCurrent();
+  ok(env.document.getElementById('calendar-grid').querySelectorAll('.month-cell').length >= 28,
+    'el calendario vuelve al mes');
+  is(env.document.getElementById('calendar-week').hidden, true, 'la semana queda oculta');
+  is(monthCal.getAttribute('aria-pressed'), 'true', 'y el botón «Mes» queda pulsado');
 });
 
 /* ==================================================================== *
