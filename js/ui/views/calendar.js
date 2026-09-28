@@ -271,7 +271,7 @@ function renderMonth(doc, monthKey, { focus, today, fs, analyses }) {
     }
     const cell = cells[i];
     const info = dayInfo(analysisOf(cell.key), fs);
-    for (const projection of info.projections) {
+    for (const projection of info.shifts) {
       if (!projection.type) continue;
       const seen = types.get(projection.type.id) || { type: projection.type, count: 0 };
       seen.count++;
@@ -318,7 +318,7 @@ function buildCell(cell, index, info, { focus, today, showWeeks, singleMember })
   ]);
 
   const bars = el('div', { class: 'cell-bars' });
-  const shown = info.projections.slice(0, MAX_BARS);
+  const shown = info.shifts.slice(0, MAX_BARS);
   for (const projection of shown) {
     const hex = projection.type?.hex || projection.member?.hex || '#8A93A8';
     const barClasses = ['cell-bar'];
@@ -333,7 +333,7 @@ function buildCell(cell, index, info, { focus, today, showWeeks, singleMember })
       el('span', { class: 'bar-text' }, projectionLabel(projection, singleMember)),
     ]));
   }
-  const hidden = info.projections.length - shown.length;
+  const hidden = info.shifts.length - shown.length;
   if (hidden > 0) bars.appendChild(el('div', { class: 'cell-more' }, `+${hidden}`));
 
   const node = el('button', {
@@ -452,8 +452,8 @@ function buildWeekCard(key, info, { today, nowMinutes, singleMember }) {
   ]);
 
   const shifts = el('div', { class: 'week-shifts' });
-  if (info.projections.length) {
-    for (const projection of info.projections) {
+  if (info.shifts.length) {
+    for (const projection of info.shifts) {
       const hex = projection.type?.hex || projection.member?.hex || '#8A93A8';
       shifts.appendChild(el('span', {
         class: 'chip',
@@ -993,12 +993,21 @@ function entryVisible(entry, fs) {
  */
 function dayInfo(analysis, fs) {
   if (!analysis) {
-    return { projections: [], work: [], status: 'empty', gaps: [], holiday: false, meta: null };
+    return { projections: [], shifts: [], work: [], status: 'empty', gaps: [], holiday: false, meta: null };
   }
+
+  /* `projections` trae DOS cosas mezcladas: los turnos que empiezan este día y los
+     de ayer que cruzan la medianoche hasta esta madrugada. La cobertura necesita
+     las dos (de 00:00 a la hora de fin hay alguien trabajando), pero para LISTAR
+     solo valen las que empiezan hoy: si no, el compañero sale dos veces con el
+     mismo turno. Por eso `shifts` es lo que se enseña y `projections`/`work` lo que
+     se cuenta. Es el mismo criterio que el editor del día. */
+  const empiezanHoy = (lista) => lista.filter((p) => p.entry?.date === analysis.date);
 
   if (!fs.active) {
     return {
       projections: analysis.projections,
+      shifts: empiezanHoy(analysis.projections),
       work: analysis.working,
       status: analysis.status,
       gaps: analysis.gaps,
@@ -1009,16 +1018,17 @@ function dayInfo(analysis, fs) {
 
   const projections = analysis.projections.filter((p) => entryVisible(p.entry, fs));
   const work = projections.filter((p) => p.isWork);
+  const shifts = empiezanHoy(projections);
   const holiday = analysis.isHoliday;
   const meta = analysis.dayMeta;
 
-  if (!work.length) return { projections, work, status: 'empty', gaps: [], holiday, meta };
+  if (!work.length) return { projections, shifts, work, status: 'empty', gaps: [], holiday, meta };
   // Un día con la demanda puesta a 0 no espera a nadie (misma regla que el motor).
   if (analysis.dayMeta?.demandOverride === 0) {
-    return { projections, work, status: 'covered', gaps: [], holiday, meta };
+    return { projections, shifts, work, status: 'covered', gaps: [], holiday, meta };
   }
   const gaps = gapsOf(work);
-  return { projections, work, status: gaps.length ? 'gaps' : 'covered', gaps, holiday, meta };
+  return { projections, shifts, work, status: gaps.length ? 'gaps' : 'covered', gaps, holiday, meta };
 }
 
 /** Tramos del día sin nadie trabajando, a partir de las proyecciones visibles. */
@@ -1117,10 +1127,10 @@ function daySummary(key, info) {
 
   const work = info.work;
   if (work.length) parts.push(work.map(projectionShort).join(' · '));
-  for (const projection of info.projections) {
+  for (const projection of info.shifts) {
     if (!projection.isWork) parts.push(projectionShort(projection));
   }
-  if (!info.projections.length) parts.push('Sin turnos');
+  if (!info.shifts.length) parts.push('Sin turnos');
 
   if (work.length && info.gaps.length) {
     parts.push(`Huecos: ${info.gaps.map((g) => `${timeLabel(g.start)}–${timeLabel(g.end)}`).join(', ')}`);
@@ -1147,7 +1157,7 @@ function dayAriaLabel(key, info) {
 
 function notesCount(info) {
   let count = info.meta?.notes ? 1 : 0;
-  for (const projection of info.projections) if (projection.entry?.notes) count++;
+  for (const projection of info.shifts) if (projection.entry?.notes) count++;
   return count;
 }
 

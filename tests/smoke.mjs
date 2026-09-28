@@ -593,15 +593,15 @@ it('el calendario pinta los siete días de la semana y vuelve al mes', () => {
   is(cards[6].dataset.date, '2025-06-15', 'y termina el domingo');
 
   // Cada tarjeta lleva los turnos con su tipo y su horario, y el estado de
-  // cobertura, igual que una fila del modo lista. Salen más chips que personas
-  // porque el día también incluye la madrugada de los turnos de noche de ayer
-  // (que es justo lo que cuenta la cobertura).
+  // cobertura, igual que una fila del modo lista. Solo se listan los turnos que
+  // EMPIEZAN ese día: la madrugada de los turnos de ayer cuenta para la cobertura,
+  // pero no se lista, porque si no el compañero sale dos veces con el mismo turno.
   const chips = cards[0].querySelectorAll('.week-shifts .chip');
-  ok(chips.length >= 5, `chips de turno ese día: ${chips.length}`);
+  ok(chips.length >= 4, `chips de turno ese día: ${chips.length}`);
   ok([...chips].some((c) => /\d{2}:\d{2}–\d{2}:\d{2}/.test(c.textContent)),
     `algún chip lleva el horario (${[...chips].map((c) => c.textContent).join(' | ')})`);
-  ok([...chips].some((c) => String(c.getAttribute('title')).includes('viene de ayer')),
-    'y aparece la continuación del turno de noche de ayer');
+  ok(![...chips].some((c) => String(c.getAttribute('title')).includes('viene de ayer')),
+    'y NO se lista la continuación del turno de noche de ayer');
   ok(cards[0].querySelector('.day-flags .badge'), 'la tarjeta lleva el estado de cobertura');
 
   const title = env.document.getElementById('calendar-title').textContent;
