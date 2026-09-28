@@ -29,7 +29,9 @@
  */
 
 import { TABLES } from '../config.js';
-import { authFetch, isSignedIn, currentSession, AuthError } from './auth.js';
+import {
+  authFetch, isSignedIn, currentSession, estadoDeLaNube, request, AuthError,
+} from './auth.js';
 import { normalizeTeamId } from './model.js';
 import { storage } from './storage.js';
 
@@ -357,6 +359,233 @@ async function borrar(tabla, filtro) {
 function eq(valor) {
   return encodeURIComponent(String(valor));
 }
+
+/* ==================================================================== *
+ * «Probar la conexión» (Ajustes → Nube)
+ *
+ * POR QUÉ VIVE AQUÍ Y NO EN LA VISTA. La comprobación tiene que usar EL MISMO
+ * camino que usa crear un equipo: si se hiciera una llamada paralela «de
+ * prueba», podría ir bien mientras la de verdad falla, que es justo la clase de
+ * mentira que hay que evitar. Y quien conoce la ruta de la API REST es esta
+ * capa, la única que además tiene la cabecera `apikey` puesta en un solo sitio.
+ *
+ * POR QUÉ NO LANZA NUNCA. La interfaz pinta lo que devuelve esto. Si lanzara,
+ * el botón se quedaría mudo justo cuando el usuario más necesita que le
+ * expliquen algo. Cada rama devuelve un mensaje y, cuando el servidor ha
+ * contestado, su mensaje LITERAL (citado, sin traducir ni adornar).
+ *
+ * Y cuando no se puede asegurar algo (sin conexión, una respuesta que no se
+ * entiende) lo dice: antes un «no se ha podido comprobar» que un falso «todo
+ * bien».
+ * ==================================================================== */
+
+/**
+ * Código imposible de acertar: el alfabeto de códigos no tiene guiones, así que
+ * esta llamada de sondeo no puede dar de alta a nadie ni tocar nada.
+ */
+const CODIGO_DE_SONDEO = 'HORUS-SIN-SESION';
+
+/** Cuerpo de una respuesta, recortado, para poder citarlo en una línea. */
+async function leerCuerpoCorto(response) {
+  try {
+    const texto = String(await response.text() || '').trim();
+    return texto ? texto.slice(0, 300) : '';
+  } catch {
+    return '';
+  }
+}
+
+/** El mensaje que da Supabase, sacado de su cuerpo JSON. */
+function mensajeDelServidor(texto) {
+  if (!texto) return '';
+  try {
+    const parsed = JSON.parse(texto);
+    const mensaje = parsed?.message || parsed?.error_description || parsed?.error || parsed?.hint;
+    if (typeof mensaje === 'string' && mensaje.trim()) return limpiarMensaje(mensaje);
+  } catch { /* no era JSON: se cita el texto tal cual */ }
+  return limpiarMensaje(texto);
+}
+
+/** La respuesta del servidor en una línea: «HTTP 401 · Invalid API key». */
+function citaDelServidor(response, texto) {
+  const mensaje = mensajeDelServidor(texto);
+  return `HTTP ${response.status}${mensaje ? ` · ${mensaje}` : ''}`;
+}
+
+/**
+ * Comprueba de verdad la configuración de la nube, por partes y parando en el
+ * primer problema (no tiene sentido preguntar por la sesión si la clave no
+ * vale):
+ *
+ *   1. La configuración: sin URL o sin clave no se toca la red.
+ *   2. La clave: una lectura de equipos SIN sesión. Un 401 significa que la
+ *      clave no vale; una lectura correcta, que el proyecto la acepta.
+ *   3. La sesión: sin cuenta no se pueden crear equipos ni sincronizar.
+ *   4. Todo bien.
+ *
+ * @returns {Promise<{ok:boolean, tipo:string, titulo:string, detalle:string,
+ *   url:string, proyecto:string, fuente:string,
+ *   clave:{hay:boolean,mascara:string,pareceJwt:boolean,longitud:number},
+ *   respuesta:string|null}>}
+ */
+export async function probarConexion() {
+  const estado = estadoDeLaNube();
+  const comun = {
+    url: estado.url,
+    proyecto: estado.proyecto,
+    fuente: estado.fuente,
+    clave: estado.clave,
+    respuesta: null,
+  };
+
+  // 1) La configuración, sin red.
+  if (estado.falta) {
+    // Si lo que falta es la clave, se dice de dónde se copia entera: una clave
+    // pegada a medias es el motivo más común de este diagnóstico.
+    const pista = estado.falta === 'clave' || estado.falta === 'url_y_clave'
+      ? ' La clave «anon» se copia entera (empieza por «eyJ») desde Supabase → Project Settings → API.'
+      : '';
+    return {
+      ...comun,
+      ok: false,
+      tipo: estado.falta,
+      titulo: 'Falta configurar la nube',
+      detalle: `${estado.mensaje} No se ha hecho ninguna petición al servidor.${pista}`,
+    };
+  }
+
+  // 2) La clave: se pide una lectura sencilla de la tabla de equipos, a
+  //    propósito SIN sesión. Es el camino que falla cuando la clave va vacía,
+  //    truncada o es de otro proyecto.
+  let respuestaClave;
+  try {
+    respuestaClave = await request(`/rest/v1/${TABLES.teams}?select=id&limit=1`);
+  } catch (err) {
+    if (err instanceof AuthError && err.offline) {
+      return {
+        ...comun,
+        ok: false,
+        tipo: 'sin_conexion',
+        titulo: 'No se ha podido comprobar',
+        detalle: 'No hay conexión con el servidor, así que la comprobación no es concluyente. '
+          + 'Vuelve a intentarlo cuando tengas internet.',
+      };
+    }
+    return {
+      ...comun,
+      ok: false,
+      tipo: 'error_inesperado',
+      titulo: 'No se ha podido comprobar',
+      detalle: `La comprobación ni siquiera ha podido empezar: ${err?.message || 'error desconocido'}.`,
+    };
+  }
+
+  const textoClave = await leerCuerpoCorto(respuestaClave);
+  const citaClave = citaDelServidor(respuestaClave, textoClave);
+  const conRespuesta = { ...comun, respuesta: citaClave };
+
+  if (respuestaClave.status === 401 || /no api key found|invalid api key/i.test(textoClave)) {
+    return {
+      ...conRespuesta,
+      ok: false,
+      tipo: 'clave_invalida',
+      titulo: 'La clave pública no vale',
+      detalle: `El servidor ha rechazado la petición: «${citaClave}». Revisa en Ajustes → Nube que la clave «anon» `
+        + `del proyecto «${estado.proyecto || '(sin URL)'}» esté pegada entera: una clave a medias da este mismo error.`,
+    };
+  }
+
+  if (respuestaClave.status === 404 || /PGRST205|could not find the table|relation .* does not exist/i.test(textoClave)) {
+    return {
+      ...conRespuesta,
+      ok: false,
+      tipo: 'sin_tablas',
+      titulo: 'La clave vale, pero faltan las tablas de HORUS',
+      detalle: `El proyecto ha aceptado la clave, pero al leer «${TABLES.teams}» ha respondido: «${citaClave}». `
+        + 'Aplica el archivo SQL de la carpeta «supabase» en el editor SQL del proyecto.',
+    };
+  }
+
+  if (!respuestaClave.ok) {
+    // Ni todo bien ni un diagnóstico seguro: se dice tal cual, con la respuesta
+    // del servidor delante, en vez de dar la conexión por buena.
+    return {
+      ...conRespuesta,
+      ok: false,
+      tipo: 'indeterminado',
+      titulo: 'No se puede asegurar que la clave valga',
+      detalle: `El servidor ha respondido «${citaClave}» a una lectura sencilla de equipos. `
+        + 'Con esa respuesta la comprobación no es concluyente: revisa la URL y la clave en Ajustes → Nube.',
+    };
+  }
+
+  // 3) La sesión. Crear un equipo y sincronizar necesitan una cuenta.
+  if (!isSignedIn()) {
+    // Se llama a la función de entrar en un equipo sin sesión: el servidor solo
+    // se la concede a las cuentas, así que su respuesta es la prueba de que
+    // hace falta iniciar sesión. Con el código de sondeo no puede dar de alta a
+    // nadie.
+    let citaRpc = null;
+    try {
+      const respuestaRpc = await request('/rest/v1/rpc/horus_join_team', {
+        method: 'POST',
+        body: { p_code: CODIGO_DE_SONDEO },
+      });
+      citaRpc = citaDelServidor(respuestaRpc, await leerCuerpoCorto(respuestaRpc));
+    } catch { /* la RPC es un extra: sin ella el diagnóstico sigue valiendo */ }
+
+    return {
+      ...conRespuesta,
+      ok: false,
+      tipo: 'sin_sesion',
+      titulo: 'La clave vale, pero no has iniciado sesión',
+      detalle: `El servidor ha aceptado la clave pública (la lectura de equipos responde «${citaClave}»)`
+        + (citaRpc ? `, y sin cuenta la función de entrar en un equipo responde «${citaRpc}»` : '')
+        + '. Crear un equipo y sincronizar el cuadrante necesitan una cuenta: inicia sesión en «Cuenta y nube».',
+    };
+  }
+
+  // 4) La sesión, contra el servidor.
+  let respuestaSesion;
+  try {
+    respuestaSesion = await authFetch('/auth/v1/user');
+  } catch (err) {
+    return {
+      ...conRespuesta,
+      ok: false,
+      tipo: 'sesion_invalida',
+      titulo: 'La clave vale, pero la sesión ya no',
+      detalle: `El servidor ha aceptado la clave pública, pero no se ha podido comprobar tu cuenta: `
+        + `${err?.message || 'error desconocido'}. Vuelve a iniciar sesión.`,
+    };
+  }
+
+  const textoSesion = await leerCuerpoCorto(respuestaSesion);
+  const citaSesion = citaDelServidor(respuestaSesion, textoSesion);
+  if (!respuestaSesion.ok) {
+    return {
+      ...comun,
+      respuesta: `${citaClave} · ${citaSesion}`,
+      ok: false,
+      tipo: 'sesion_invalida',
+      titulo: 'La clave vale, pero la sesión ya no',
+      detalle: `El servidor ha aceptado la clave pública, pero ha rechazado el token de tu sesión: «${citaSesion}». `
+        + 'Vuelve a iniciar sesión.',
+    };
+  }
+
+  const email = currentSession()?.email || '';
+  return {
+    ...comun,
+    respuesta: `${citaClave} · ${citaSesion}`,
+    ok: true,
+    tipo: 'ok',
+    titulo: 'La conexión funciona',
+    detalle: `La clave pública y tu sesión${email ? ` (${email})` : ''} funcionan: el servidor ha respondido `
+      + `«${citaClave}» a la lectura de equipos y «${citaSesion}» a tu cuenta.`,
+  };
+}
+
 
 /* ------------------------------------------------------------------ *
  * Código de invitación

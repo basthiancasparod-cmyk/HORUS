@@ -1509,11 +1509,21 @@ const UUID_MIEMBROS = 'aaaa1111-2222-4333-8444-555555555505';
 const UUID_MIOS_A = 'aaaa1111-2222-4333-8444-555555555506';
 const UUID_MIOS_B = 'aaaa1111-2222-4333-8444-555555555507';
 
+/**
+ * Una clave con la FORMA de una clave de Supabase (JWT: tres partes separadas
+ * por puntos y más de 40 caracteres, así que `config.js` la acepta) pero que el
+ * servidor rechaza. Es lo que pasa cuando se pega una clave truncada o la de
+ * otro proyecto, y es lo que el botón «Probar la conexión» tiene que saber
+ * contar.
+ */
+const CLAVE_QUE_NO_VALE = `eyJmYWxzYS1jbGF2ZQ.${'x'.repeat(60)}.firma`;
+
 /** Supabase falso: las dos tablas de equipo y el alta por código. */
 function crearNubeDeEquipos() {
   const tablas = new Map();
   const llamadas = [];
   let contador = 0;
+  let sinTablas = false;
   const usuario = { id: USUARIO };
 
   const tabla = (nombre) => {
@@ -1631,12 +1641,37 @@ function crearNubeDeEquipos() {
       });
     }
 
+    // Y con una clave que no es de este proyecto, tampoco se llega a la tabla:
+    // el mismo 401 que da Supabase, con su mensaje literal.
+    if (cabeceras.apikey === CLAVE_QUE_NO_VALE) {
+      return fallo({
+        status: 401,
+        message: 'Invalid API key',
+        hint: 'Double check your Supabase `anon` or `service_role` API key.',
+      });
+    }
+
+    // Comprobar la sesión es leer el usuario de GoTrue: aquí devuelve el dueño
+    // de la sesión falsa, como haría el servidor con un token bueno.
+    if (ruta.includes('/auth/v1/user')) {
+      return ok({ id: usuario.id, email: 'ana@test', created_at: new Date().toISOString() });
+    }
+
     if (ruta.includes('/rpc/horus_join_team')) {
       const res = unirPorCodigo(opts.body ? JSON.parse(opts.body).p_code : '');
       return res.error ? fallo(res.error) : ok(res.equipo);
     }
 
     const nombre = ruta.replace(/^.*\/rest\/v1\//, '');
+    // Un proyecto al que todavía no se le ha aplicado el SQL: la clave vale,
+    // pero la tabla no existe. PostgREST lo dice así.
+    if (sinTablas && /^horus_/.test(nombre)) {
+      return fallo({
+        status: 404,
+        message: `Could not find the table 'public.${nombre}' in the schema cache`,
+        hint: "Perhaps you meant the table 'public.horus_teams'",
+      });
+    }
     if (metodo === 'POST') {
       const res = insertar(nombre, JSON.parse(opts.body));
       return res.error ? fallo(res.error) : ok(res.creadas, 201);
@@ -1671,7 +1706,9 @@ function crearNubeDeEquipos() {
       team_id: teamId, user_id: userId, role, owner_key: `team:${teamId}`,
       deleted: false, joined_at: new Date().toISOString(),
     }),
-    reset: () => { tablas.clear(); llamadas.length = 0; contador = 0; },
+    /** Simula un proyecto sin el SQL aplicado: la clave vale, la tabla no está. */
+    simularSinTablas: (valor) => { sinTablas = !!valor; },
+    reset: () => { tablas.clear(); llamadas.length = 0; contador = 0; sinTablas = false; },
   };
 }
 
@@ -2220,6 +2257,245 @@ it('ningún módulo habla con Supabase por su cuenta: todo pasa por authFetch', 
     .filter((ruta) => /apikey\s*:/.test(readFileSync(ruta, 'utf8')))
     .map((ruta) => ruta.slice(ROOT.length + 1).split('\\').join('/'));
   is(conApiKey.join(','), 'js/core/auth.js', 'el único sitio que escribe la cabecera apikey');
+});
+
+/* ==================================================================== *
+ * 14. La app dice QUÉ falta y lo comprueba de verdad
+ *
+ * El fallo que se cuela desde la aplicación real no es solo que falte la clave:
+ * es que, cuando falta o no vale, el usuario acaba delante de un mensaje del
+ * servidor en inglés («No API key found in request») que no dice qué arreglar
+ * ni dónde. Aquí se prueba lo contrario:
+ *   · sin URL o sin clave NO se sale a la red y el error está en español y
+ *     señala Ajustes → Nube (comprobado con el contador de llamadas del falso);
+ *   · el botón «Probar la conexión» distingue falta de configuración, clave
+ *     que no vale, proyecto sin las tablas, falta de sesión y todo bien;
+ *   · cita el mensaje LITERAL del servidor;
+ *   · y enseña la URL y la clave enmascarada sin enseñar jamás la clave entera.
+ * ==================================================================== */
+
+describe('La nube sin clave y «Probar la conexión»');
+
+const configMod = await import('../js/config.js');
+
+/** Los escenarios de configuración que se prueban, siempre restaurados después. */
+async function conConfiguracion(ajustes, fn) {
+  configMod.setCloudConfig(ajustes.propia || null);
+  configMod.setDefaultCloud(ajustes.porDefecto || configMod.DEFAULT_CLOUD);
+  configMod.resetCloudConfigCache();
+  try {
+    return await fn();
+  } finally {
+    configMod.setCloudConfig(null);
+    configMod.setDefaultCloud(configMod.DEFAULT_CLOUD);
+    configMod.resetCloudConfigCache();
+  }
+}
+
+await itAsync('sin la clave pública, la capa de equipos lo dice en español y NO sale ninguna petición', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  await conConfiguracion({ porDefecto: { url: 'https://proyecto-de-prueba.supabase.co', anonKey: '' } }, async () => {
+    const crear = await teamsMod.createTeam('Equipo sin clave');
+    is(crear.ok, false, 'no se puede crear el equipo');
+    ok(/clave pública/i.test(crear.error), `el error dice qué falta (${crear.error})`);
+    ok(crear.error.includes('Ajustes → Nube'), 'y dónde se arregla');
+    is(nube.llamadas.length, 0, 'no se ha hecho NINGUNA petición');
+
+    // La puerta es una sola para toda la capa: entrar, listar y leer miembros
+    // tampoco salen a la red.
+    for (const llamada of [
+      () => teamsMod.joinTeam('K7M2QP4R'),
+      () => teamsMod.myTeams(),
+      () => teamsMod.teamMembers(UUID_CABECERAS),
+    ]) {
+      const res = await llamada();
+      is(res.ok, false, 'sin clave no puede salir bien');
+      ok(res.error, 'y se explica por qué');
+    }
+    is(nube.llamadas.length, 0, 'siguen sin salir peticiones');
+
+    // Si lo que falta es la URL, el mensaje lo dice: no es el mismo arreglo.
+    configMod.setDefaultCloud({ url: '', anonKey: configMod.DEFAULT_CLOUD.anonKey });
+    configMod.resetCloudConfigCache();
+    const sinUrl = await teamsMod.createTeam('Equipo sin URL');
+    is(sinUrl.ok, false);
+    ok(/falta la url/i.test(sinUrl.error), `el error habla de la URL (${sinUrl.error})`);
+    ok(sinUrl.error.includes('Ajustes → Nube'), 'y también dice dónde se arregla');
+    is(nube.llamadas.length, 0, 'y tampoco ha salido ninguna petición');
+  });
+});
+
+await itAsync('«Probar la conexión» avisa de que falta la clave sin llamar a la red', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  await conConfiguracion({ porDefecto: { url: 'https://proyecto-de-prueba.supabase.co', anonKey: '' } }, async () => {
+    const store = storeMod.createStore(oneDayDoc());
+    await montarEnAjustes(store, 20);
+
+    const boton = env.document.getElementById('settings-cloud-test');
+    ok(boton, 'el botón existe en index.html');
+    boton.click();
+    await sleep(40);
+
+    const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+    ok(/falta configurar la nube/i.test(texto), `el resultado dice qué pasa (${texto.slice(0, 120)})`);
+    ok(/clave pública/i.test(texto), 'dice qué falta exactamente');
+    ok(texto.includes('Ajustes → Nube'), 'y dónde se arregla');
+    ok(texto.includes('proyecto-de-prueba.supabase.co'), 'enseña la URL que se está usando');
+    ok(/no hay ninguna guardada/i.test(texto), 'y que no hay clave guardada');
+    is(nube.llamadas.length, 0, 'sin configuración no se ha llamado al servidor');
+  });
+});
+
+await itAsync('«Probar la conexión» cita el error del servidor cuando la clave no vale', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  await conConfiguracion({
+    propia: { url: 'https://proyecto-de-prueba.supabase.co', anonKey: CLAVE_QUE_NO_VALE },
+  }, async () => {
+    const store = storeMod.createStore(oneDayDoc());
+    await montarEnAjustes(store, 20);
+
+    env.document.getElementById('settings-cloud-test').click();
+    await sleep(40);
+
+    const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+    ok(/la clave pública no vale/i.test(texto), `se dice que la clave no vale (${texto.slice(0, 160)})`);
+    ok(texto.includes('Invalid API key'), 'y se cita el mensaje literal del servidor');
+    ok(texto.includes('HTTP 401'), 'con su código');
+    ok(texto.includes(CLAVE_QUE_NO_VALE.slice(0, 8)), 'se enseña el trozo enmascarado de la clave');
+    ok(!texto.includes(CLAVE_QUE_NO_VALE), 'pero NUNCA la clave entera');
+    ok(texto.includes('caracteres'), 'y la longitud, que delata una clave truncada');
+  });
+});
+
+await itAsync('si la petición se queda sin apikey, el diagnóstico nombra el fallo original', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 20);
+
+  // La regresión que llegó desde la aplicación real: la cabecera `apikey` no
+  // sale. Se simula en el cable, no en el módulo, y el botón tiene que contar
+  // el mensaje del servidor en vez de dejarlo crudo.
+  const fetchSano = globalThis.fetch;
+  globalThis.fetch = async (url, opts = {}) => {
+    const cabeceras = { ...(opts.headers || {}) };
+    for (const nombre of Object.keys(cabeceras)) {
+      if (nombre.toLowerCase() === 'apikey') delete cabeceras[nombre];
+    }
+    return fetchSano(String(url), { ...opts, headers: cabeceras });
+  };
+
+  try {
+    env.document.getElementById('settings-cloud-test').click();
+    await sleep(40);
+  } finally {
+    globalThis.fetch = fetchSano;
+  }
+
+  const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+  ok(/la clave pública no vale/i.test(texto), 'se explica que la clave no llega a valer');
+  ok(texto.includes('No API key found in request'), 'citando el mensaje literal del fallo original');
+  ok(texto.includes('HTTP 401'), 'y su código');
+});
+
+await itAsync('«Probar la conexión» avisa si hay una clave escrita sin guardar', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 20);
+
+  // El caso de «lo he pegado y sigue fallando»: la clave está en el formulario
+  // pero no se ha guardado, así que la comprobación usa la de antes.
+  const campo = env.document.getElementById('cloud-key');
+  ok(campo, 'el campo de la clave está en el formulario de la nube');
+  campo.value = CLAVE_QUE_NO_VALE;
+
+  env.document.getElementById('settings-cloud-test').click();
+  await sleep(40);
+
+  const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+  ok(/sin guardar/i.test(texto), `se avisa de que no está guardada (${texto.slice(0, 200)})`);
+  ok(/Guardar y recargar/.test(texto), 'y de qué botón hay que pulsar');
+  ok(!texto.includes(CLAVE_QUE_NO_VALE), 'y ni así se enseña la clave entera');
+});
+
+await itAsync('«Probar la conexión» distingue «la clave vale pero falta iniciar sesión»', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(false);
+
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 20);
+
+  env.document.getElementById('settings-cloud-test').click();
+  await sleep(40);
+
+  const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+  ok(/la clave vale, pero no has iniciado sesión/i.test(texto), `se distingue el caso (${texto.slice(0, 160)})`);
+  ok(/inicia sesión/i.test(texto), 'y se dice qué hacer');
+  ok(texto.includes('URL del proyecto: https://'), 'el diagnóstico enseña la URL usada');
+  ok(texto.includes('eyJhbGci'), 'y la clave enmascarada');
+  ok(!texto.includes(configMod.DEFAULT_CLOUD.anonKey), 'nunca la clave entera');
+  // La prueba de que se ha preguntado al servidor por la sesión: la función de
+  // entrar en un equipo, SIN cuenta, contesta lo suyo.
+  ok(nube.llamadas.some((p) => p.metodo === 'POST' && p.url.includes('/rpc/horus_join_team')),
+    'se ha consultado la función de equipos sin sesión');
+  ok(/código de invitación no es válido/i.test(texto), 'y se cita su respuesta literal');
+});
+
+await itAsync('«Probar la conexión» avisa si al proyecto le faltan las tablas', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  nube.simularSinTablas(true);
+
+  try {
+    const store = storeMod.createStore(oneDayDoc());
+    await montarEnAjustes(store, 20);
+
+    env.document.getElementById('settings-cloud-test').click();
+    await sleep(40);
+
+    const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+    ok(/faltan las tablas de horus/i.test(texto), `se distingue del caso de la clave (${texto.slice(0, 160)})`);
+    ok(texto.includes('Could not find the table'), 'citando la respuesta del servidor');
+    ok(/carpeta «supabase»/i.test(texto), 'y diciendo dónde está el SQL que falta');
+  } finally {
+    nube.simularSinTablas(false);
+  }
+});
+
+await itAsync('«Probar la conexión» confirma cuando todo funciona', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 20);
+
+  env.document.getElementById('settings-cloud-test').click();
+  await sleep(40);
+
+  const texto = env.document.getElementById('settings-cloud-test-result').textContent;
+  ok(/la conexión funciona/i.test(texto), `se confirma el buen estado (${texto.slice(0, 160)})`);
+  ok(texto.includes('ana@test'), 'se nombra la cuenta con la que se ha comprobado');
+  ok(texto.includes('URL del proyecto: https://'), 'y la URL que se está usando');
+  ok(texto.includes('eyJhbGci'), 'junto a la clave enmascarada');
+  ok(!texto.includes(configMod.DEFAULT_CLOUD.anonKey), 'nunca la clave entera');
+  ok(texto.includes('HTTP 200'), 'con la respuesta literal del servidor');
 });
 
 /* ==================================================================== *

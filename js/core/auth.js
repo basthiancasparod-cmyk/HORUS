@@ -10,6 +10,10 @@
  *  - Los mensajes de error se traducen a español: los de GoTrue son crípticos.
  *  - Si no hay configuración de nube, todo esto queda inerte y la app sigue
  *    funcionando en local.
+ *  - Y, si falta la URL o la clave, se falla ANTES de salir a la red: una
+ *    petición sin `apikey` la corta la puerta de entrada de Supabase con un
+ *    mensaje en inglés («No API key found in request») que no dice qué falta
+ *    ni dónde se arregla. Ver `exigirConfiguracion()`.
  */
 
 import { cloudConfig, authRedirectUrl } from '../config.js';
@@ -62,6 +66,97 @@ function translate(payload, status) {
 }
 
 /* ------------------------------------------------------------------ *
+ * La configuración, ANTES de la red
+ *
+ * POR QUÉ ESTO EXISTE. Sin la cabecera `apikey` (o con la clave vacía) la
+ * puerta de entrada de Supabase corta la petición ANTES de mirar tabla, fila o
+ * política, y contesta en inglés: «No API key found in request». Ese mensaje no
+ * dice qué falta ni dónde se arregla, y encima parece un problema de permisos
+ * cuando no lo es. Comprobar aquí convierte ese muro en una instrucción.
+ * ------------------------------------------------------------------ */
+
+/** Dónde se arregla la configuración de la nube, dicho como lo ve el usuario. */
+const AJUSTES_NUBE = 'Ajustes → Nube';
+
+/**
+ * Mensaje de cada falta, con la instrucción para resolverla. Se escribe entero
+ * en cada caso (y no concatenando piezas) porque en español el género y el
+ * número cambian según lo que falte.
+ */
+const SIN_CONFIGURACION = {
+  url_y_clave: `Faltan la URL y la clave pública del proyecto de Supabase. Configúralas en ${AJUSTES_NUBE}.`,
+  url: `Falta la URL del proyecto de Supabase. Configúrala en ${AJUSTES_NUBE}.`,
+  clave: `Falta la clave pública (anon) del proyecto de Supabase. Configúrala en ${AJUSTES_NUBE}.`,
+};
+
+/**
+ * Qué falta para poder hablar con Supabase: `null` si no falta nada, o
+ * `'url_y_clave'`, `'url'` o `'clave'`.
+ *
+ * OJO con las claves de formato nuevo de Supabase (`sb_publishable_…`): no son
+ * JWT, así que `config.js` las descarta al guardarlas y aquí cuentan como clave
+ * que falta. El diagnóstico de Ajustes → Nube lo enseña para que se vea.
+ */
+export function faltaConfiguracion() {
+  const { url, anonKey } = cfg();
+  if (!url && !anonKey) return 'url_y_clave';
+  if (!url) return 'url';
+  if (!anonKey) return 'clave';
+  return null;
+}
+
+/**
+ * Se llama ANTES de cualquier petición. Lanza un `AuthError` en español con lo
+ * que falta y dónde se arregla, en vez de dejar salir una petición condenada a
+ * un 401 que el usuario no puede interpretar.
+ */
+function exigirConfiguracion() {
+  const falta = faltaConfiguracion();
+  if (falta) throw new AuthError(SIN_CONFIGURACION[falta], { code: `sin_${falta}` });
+}
+
+/** El identificador del proyecto (el subdominio), para poder nombrarlo. */
+function proyectoDeUrl(url) {
+  return String(url || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+}
+
+/**
+ * Descripción de la clave pública SIN enseñarla nunca entera: los ocho
+ * primeros caracteres bastan para reconocer cuál se pegó y para notar de un
+ * vistazo una clave truncada o pegada a medias.
+ */
+export function describirClave(clave) {
+  const texto = String(clave || '');
+  if (!texto) return { hay: false, mascara: '', pareceJwt: false, longitud: 0 };
+  return {
+    hay: true,
+    mascara: `${texto.slice(0, 8)}…`,
+    // Las claves de Supabase (la «anon») son JWT: su primera parte va en base64
+    // y empieza siempre por «eyJ».
+    pareceJwt: texto.startsWith('eyJ'),
+    longitud: texto.length,
+  };
+}
+
+/**
+ * Lo que se sabe de la nube AHORA, sin tocar la red. Lo usa Ajustes → Nube para
+ * poder decir qué se está usando (URL, de dónde sale, qué forma tiene la clave)
+ * antes incluso de comprobar nada.
+ */
+export function estadoDeLaNube() {
+  const { url, anonKey, source } = cfg();
+  const falta = faltaConfiguracion();
+  return {
+    url,
+    proyecto: proyectoDeUrl(url),
+    fuente: source,
+    falta,
+    mensaje: falta ? SIN_CONFIGURACION[falta] : null,
+    clave: describirClave(anonKey),
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Cliente HTTP
  * ------------------------------------------------------------------ */
 
@@ -100,14 +195,18 @@ function baseHeaders(extra = {}) {
 
 /**
  * Petición cruda a Supabase. No refresca token: eso es cosa de `authFetch`.
+ *
+ * Sin URL o sin clave NO se llama a `fetch`: se falla antes y en español. Una
+ * petición sin `apikey` solo puede acabar en un 401 del servidor que el usuario
+ * no puede interpretar (y que, además, se confunde con un problema de permisos
+ * cuando lo que falta es la configuración).
+ *
  * @param {string} path ruta relativa, p. ej. "/auth/v1/token?grant_type=password"
  * @param {{method?:string, body?:any, headers?:object, signal?:AbortSignal}} [opts]
  */
 export async function request(path, opts = {}) {
-  const { url, configured } = cfg();
-  if (!configured) {
-    throw new AuthError('La nube no está configurada. La app funciona en modo local.', { code: 'not_configured' });
-  }
+  exigirConfiguracion();
+  const { url } = cfg();
   const { method = 'GET', body, headers = {}, signal } = opts;
   let response;
   try {

@@ -19,7 +19,13 @@
 // (las cabeceras `apikey`/`Authorization` de `auth.js`). `teams.js` está en el
 // precache, así que sin subir esto el navegador seguiría sirviendo el módulo
 // viejo y el arreglo no llegaría a quien lo necesita.
-const VERSION = 'v4.20.0';
+//
+// v4.21.0: la app ya no deja salir una petición sin clave —lo dice en español y
+// señala Ajustes → Nube— y Ajustes estrena «Probar la conexión» con el mensaje
+// literal del servidor. Cambian `index.html`, `auth.js`, `teams.js` y
+// `settings.js`, los cuatro en el precache: sin subir la versión, el navegador
+// seguiría sirviendo los archivos viejos y el arreglo no llegaría.
+const VERSION = 'v4.21.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 

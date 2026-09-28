@@ -87,6 +87,9 @@ export function mount(ctx) {
     aiTestResult: byId('settings-ai-test-result'),
     account: byId('settings-account'),
     cloud: byId('settings-cloud'),
+    cloudTest: byId('settings-cloud-test'),
+    cloudTestResult: byId('settings-cloud-test-result'),
+    cloudKeyField: null,
     storage: byId('settings-storage'),
     storageBadge: byId('settings-storage-badge'),
     backup: byId('settings-backup'),
@@ -535,6 +538,14 @@ function wireSettings() {
     // botones se atienden por delegación desde un contenedor que no cambia.
     refs.teamCard.addEventListener('click', onTeamCardClick);
     refs.teamCard.addEventListener('change', onTeamCardChange);
+  });
+
+  /* ---------- Nube ---------- */
+
+  once('cloudTest', () => {
+    // El botón y su resultado viven en el HTML, fuera de la tarjeta que se
+    // repinta: así el diagnóstico no desaparece en el siguiente repintado.
+    refs.cloudTest.addEventListener('click', probarConexionNube);
   });
 
   /* ---------- Peligro ---------- */
@@ -1893,13 +1904,20 @@ function paintCloud(ctx = live) {
       value: own ? config.url : '',
     }),
   ]));
+
+  // El campo de la clave se guarda en una referencia viva (el id se crea aquí,
+  // en tiempo de ejecución): así el diagnóstico puede avisar de una clave
+  // escrita pero SIN guardar sin volver a buscarla por su id.
+  const campoClave = el('input', {
+    class: 'input', type: 'password', id: 'cloud-key',
+    placeholder: 'eyJhbGciOi…', autocomplete: 'off',
+    value: own ? config.anonKey : '',
+  });
+  refs.cloudKeyField = campoClave;
+
   details.appendChild(el('div', { class: 'field' }, [
     el('label', { class: 'field-label', for: 'cloud-key' }, 'Clave anon'),
-    el('input', {
-      class: 'input', type: 'password', id: 'cloud-key',
-      placeholder: 'eyJhbGciOi…', autocomplete: 'off',
-      value: own ? config.anonKey : '',
-    }),
+    campoClave,
   ]));
   details.appendChild(el('div', { class: 'row wrap', style: { gap: 'var(--sp-2)' } }, [
     el('button', {
@@ -1907,7 +1925,7 @@ function paintCloud(ctx = live) {
       onclick: () => {
         const result = setCloudConfig({
           url: byId('cloud-url')?.value || '',
-          anonKey: byId('cloud-key')?.value || '',
+          anonKey: campoClave.value || '',
         });
         if (!result.ok) {
           notify.error(result.error);
@@ -1931,6 +1949,103 @@ function paintCloud(ctx = live) {
 
   body.appendChild(details);
   box.appendChild(body);
+}
+
+/* ------------------------------------------------------------------ *
+ * «Probar la conexión»: una comprobación de verdad, contada en español
+ *
+ * El diagnóstico (qué se pregunta al servidor y en qué orden) vive en
+ * `core/teams.js`, que es la capa que conoce la API de Supabase. Aquí solo se
+ * pulsa, se pinta y se añaden las dos cosas que únicamente sabe la interfaz:
+ * que la clave se enseña enmascarada y que puede haber algo escrito sin
+ * guardar (la causa más común de «lo he pegado y sigue fallando»).
+ * ------------------------------------------------------------------ */
+
+async function probarConexionNube() {
+  const boton = refs.cloudTest;
+  if (!boton) return;
+
+  const etiqueta = boton.textContent;
+  boton.disabled = true;
+  boton.textContent = 'Comprobando…';
+  setCloudTestResult('info', 'Comprobando la conexión con Supabase…', []);
+
+  try {
+    const resultado = await teams.probarConexion();
+    paintCloudTest(resultado);
+
+    if (resultado.ok) notify.success('La conexión funciona');
+    else if (resultado.tipo === 'sin_sesion') notify.warning('La clave vale: falta iniciar sesión');
+    else if (resultado.tipo === 'sin_conexion' || resultado.tipo === 'indeterminado') {
+      notify.warning('No se ha podido comprobar la conexión');
+    } else if (/^sin_/.test(resultado.tipo)) notify.warning('Falta configurar la nube');
+    else notify.error('La conexión no funciona');
+  } catch (err) {
+    // El contrato de `probarConexion()` dice que no lanza; si aun así pasa, se
+    // explica sin enseñar ninguna clave.
+    setCloudTestResult('error', `La comprobación ha fallado: ${err.message}`, []);
+  } finally {
+    boton.disabled = false;
+    boton.textContent = etiqueta;
+  }
+}
+
+/** Pinta el diagnóstico, añadiendo los datos técnicos que solo conoce la vista. */
+function paintCloudTest(resultado) {
+  const lineas = [];
+
+  // Qué se está usando: sin esto, «la clave no vale» no se puede contrastar
+  // contra ningún sitio.
+  const deDonde = resultado.fuente === 'override'
+    ? ' (tu propio proyecto)'
+    : (resultado.fuente === 'default' ? ' (servidor por defecto)' : '');
+  lineas.push({ texto: `URL del proyecto: ${resultado.url || '(sin configurar)'}${deDonde}`, mono: true });
+
+  // Solo la máscara: la clave entera no se enseña nunca en el diagnóstico. La
+  // longitud y el «empieza por eyJ» bastan para ver si se ha pegado a medias o
+  // si no es una clave de Supabase.
+  const clave = resultado.clave || {};
+  lineas.push({
+    texto: clave.hay
+      ? `Clave pública: ${clave.mascara} · ${clave.longitud} caracteres`
+        + (clave.pareceJwt ? ' · empieza por «eyJ»' : ' · NO empieza por «eyJ»: puede no ser una clave de Supabase')
+      : 'Clave pública: no hay ninguna guardada',
+    mono: true,
+  });
+
+  if (resultado.respuesta) lineas.push({ texto: `Respuesta del servidor: ${resultado.respuesta}`, mono: false });
+
+  // Una clave escrita en el formulario y sin guardar no es la que se está
+  // usando: si la comprobación falla, esto es lo primero que hay que mirar.
+  const sinGuardar = refs.cloudKeyField?.value?.trim();
+  if (sinGuardar && sinGuardar !== cloudConfig().anonKey) {
+    lineas.push({
+      texto: 'El campo «Clave anon» tiene otro valor sin guardar: pulsa «Guardar y recargar» y vuelve a probar.',
+      mono: false,
+    });
+  }
+
+  // Solo se pinta en rojo lo que es un fallo de verdad; «no se ha podido
+  // comprobar» y «falta iniciar sesión» son avisos, no errores de la clave.
+  const grave = ['clave_invalida', 'sin_tablas', 'sesion_invalida', 'error_inesperado'].includes(resultado.tipo);
+  const tipo = resultado.ok ? 'success' : (grave || /^sin_(url|clave)/.test(resultado.tipo) ? 'error' : 'info');
+  setCloudTestResult(tipo, `${resultado.titulo}. ${resultado.detalle}`, lineas);
+}
+
+/** Mensaje del diagnóstico, sin `innerHTML` y con el icono de la casa. */
+function setCloudTestResult(kind, message, lineas = []) {
+  const box = refs.cloudTestResult;
+  if (!box) return;
+  clear(box);
+  const iconName = kind === 'success' ? 'check' : kind === 'error' ? 'alert' : 'info';
+  const clase = kind === 'success' ? 'success' : kind === 'error' ? 'error' : 'info';
+  box.appendChild(el('div', { class: `gap-item gap-item-${clase}` }, [
+    icon(iconName, 16),
+    el('div', { class: 'grow' }, [
+      el('div', { class: 'label' }, message),
+      ...lineas.map((linea) => el('div', { class: linea.mono ? 'sub t-mono' : 'sub' }, linea.texto)),
+    ]),
+  ]));
 }
 
 function paintStorage() {

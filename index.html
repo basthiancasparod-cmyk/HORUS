@@ -743,6 +743,15 @@
           <h3 class="section-label">Cuenta y nube</h3>
           <div class="card" id="settings-account"></div>
           <div class="card" id="settings-cloud"></div>
+          <!-- Comprobación real de la configuración: sin red no hay nada que
+               comprobar, y con la clave mal pegada el servidor contesta en
+               inglés, así que aquí se traduce y se cita su respuesta. -->
+          <div class="row wrap" style="gap:var(--sp-2); align-items:center">
+            <button type="button" class="btn btn-sm btn-primary" id="settings-cloud-test"
+                    aria-describedby="settings-cloud-test-result">Probar la conexión</button>
+            <span class="field-hint grow">Comprueba la URL y la clave contra el servidor y explica lo que responda.</span>
+          </div>
+          <div id="settings-cloud-test-result" role="status" aria-live="polite"></div>
         </div>
 
         <!-- Importar con IA (fotos, capturas y PDF escaneados) -->
