@@ -2037,3 +2037,37 @@ a.btn { text-decoration: none; }
   .roster { font-size: 9px; }
   a[href]::after { content: ''; }
 }
+
+/* ==========================================================================
+   SOLO LECTURA POR ROL (equipo con rol `viewer`)
+   --------------------------------------------------------------------------
+   El aviso se ve, no se esconde: si los botones desaparecieran sin más, el
+   usuario creería que la aplicación está rota. Los controles que escriben se
+   quedan a la vista y DESACTIVADOS, con este aviso explicando por qué.
+   ========================================================================== */
+
+.readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--info-soft);
+  color: var(--text);
+  border-bottom: 1px solid color-mix(in srgb, var(--info) 35%, transparent);
+  font-size: var(--fs-sm);
+}
+
+.readonly-banner .label { font-weight: 600; }
+.readonly-banner .sub { font-size: var(--fs-xs); color: var(--text-dim); margin-top: 2px; }
+
+/* Aviso dentro del cuadrante, junto a las acciones que quedan desactivadas */
+.roster-readonly { align-items: flex-start; }
+
+/* Las casillas siguen viéndose, pero ya no invitan a editar */
+.roster.is-readonly td.shift-cell { cursor: not-allowed; }
+.roster.is-readonly td.shift-cell:hover { background: transparent; }
+.roster.is-readonly .shift-pill { cursor: default; }
+.roster.is-readonly .coverage-strip { cursor: default; }
+.roster.is-readonly th[data-date],
+.roster.is-readonly th.col-name { cursor: default; }
+

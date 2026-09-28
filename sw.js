@@ -15,7 +15,7 @@
  *     si fueran actuales sería peor que no responder.
  */
 
-const VERSION = 'v4.18.0';
+const VERSION = 'v4.19.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 
@@ -38,6 +38,7 @@ const PRECACHE = [
   './js/core/utils.js',
   './js/core/auth.js',
   './js/core/sync.js',
+  './js/core/teams.js',
   './js/core/exporter.js',
   './js/core/reminders.js',
   './js/core/holidays.js',

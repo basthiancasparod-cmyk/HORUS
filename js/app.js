@@ -21,6 +21,7 @@ import { createStore } from './core/store.js';
 import * as storage from './core/storage.js';
 import * as auth from './core/auth.js';
 import { createSyncEngine, hasLegacyBlob, importLegacyBlob } from './core/sync.js';
+import * as teams from './core/teams.js';
 import { createScheduler } from './core/reminders.js';
 import * as exporter from './core/exporter.js';
 import { cloudConfig, APP } from './config.js';
@@ -296,6 +297,8 @@ async function runSync({ manual = false, full = false } = {}) {
       notify.success('Todo estaba al día.');
     }
     store.markSynced();
+    // El rol en el equipo puede haber cambiado en otro dispositivo.
+    if (store.doc.teamId) refrescarRolEquipo();
     if (store.doc.migration) {
       // La migración del formato antiguo ya no está pendiente una vez subida
       store.apply((d) => { delete d.migration; }, { label: 'limpiar aviso de migración', touch: false });
@@ -323,6 +326,48 @@ function scheduleSyncPush() {
 }
 
 /* ==================================================================== *
+ * Solo lectura por rol (equipo)
+ *
+ * Si el rol del usuario en el equipo del documento no permite escribir, la
+ * aplicación entera avisa con una banda visible. La decisión de «quién puede
+ * escribir» está en `core/teams.js`, en un solo sitio; aquí solo se pinta.
+ *
+ * Y se vuelve a preguntar al servidor el rol al arrancar y tras cada
+ * sincronización: puede haber cambiado en otro dispositivo (el dueño del
+ * equipo pudo bajar a alguien a `viewer`), y trabajar con un rol viejo es
+ * justo lo que hay que evitar.
+ * ==================================================================== */
+
+/** Pinta (o esconde) la banda de solo lectura. */
+function paintReadOnlyBanner() {
+  const banner = byId('readonly-banner');
+  if (!banner) return;
+  const solo = teams.soloLectura(store?.doc);
+  banner.hidden = !solo;
+  if (!solo) return;
+  const texto = byId('readonly-banner-text');
+  if (texto) texto.textContent = teams.motivoSoloLectura();
+}
+
+/**
+ * Vuelve a comprobar el rol del usuario en el equipo del documento.
+ * Sin sesión, sin equipo o sin conexión no hace nada: se queda el rol que ya
+ * se conocía (guardado en el dispositivo) y la app sigue funcionando.
+ */
+async function refrescarRolEquipo() {
+  const teamId = store?.doc?.teamId;
+  if (!teamId || !auth.isSignedIn()) return;
+  try {
+    const res = await teams.refrescarRol(teamId);
+    if (!res.ok) return;
+  } catch {
+    return; // sin conexión o error pasajero: se mantiene lo que ya se sabía
+  }
+  paintReadOnlyBanner();
+  invalidate();
+}
+
+/* ==================================================================== *
  * Persistencia del documento
  * ==================================================================== */
 
@@ -338,6 +383,7 @@ function startPersistence() {
     scheduleSyncPush();
     scheduler?.reschedule();
     paintUndoState();
+    paintReadOnlyBanner();
     invalidate();
   });
   // Guardado de seguridad al cerrar o cambiar de pestaña
@@ -895,6 +941,9 @@ async function bootApp() {
   startNetworkWatchers();
   paintUndoState();
   paintConnectivity();
+  paintReadOnlyBanner();
+  // El rol real del usuario en el equipo, preguntado al servidor (si hay).
+  refrescarRolEquipo();
 
   // Navegador: atajos y botones globales
   wireTopbar();

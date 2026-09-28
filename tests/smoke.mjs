@@ -1473,6 +1473,515 @@ await itAsync('la clave de IA se guarda solo en las preferencias locales (nunca 
 });
 
 /* ==================================================================== *
+ * 12. Equipos: gestión en Ajustes y permisos por rol
+ *
+ * Un Supabase falso que implementa lo justo de las dos tablas de equipo y de
+ * la función `horus_join_team`. Aquí NO se simula RLS (quien pregunta lo ve
+ * todo): lo que se prueba es que la interfaz usa bien la capa de datos y que
+ * la decisión de «quién escribe» se aplica en la pantalla.
+ *
+ * Ojo con los ids: `actions.changeScope` solo acepta uuid (el servidor lo
+ * exige por el formato de `owner_key`), así que el falso genera uuids de
+ * verdad, y cada prueba usa equipos distintos para no reutilizar el estado
+ * en memoria de la vista.
+ * ==================================================================== */
+
+describe('Equipos: gestión en Ajustes y permisos por rol');
+
+const authMod = await import('../js/core/auth.js');
+const storageMod = await import('../js/core/storage.js');
+const teamsMod = await import('../js/core/teams.js');
+
+const USUARIO = 'aaaaaaaa-0000-4000-8000-000000000001';
+const OTRO_USUARIO = 'bbbbbbbb-0000-4000-8000-000000000002';
+const UUID_ENTRAR = 'aaaa1111-2222-4333-8444-555555555501';
+const UUID_SOLO_LECTURA = 'aaaa1111-2222-4333-8444-555555555502';
+const UUID_EDITAR_DUENO = 'aaaa1111-2222-4333-8444-555555555503';
+const UUID_EDITAR_ADMIN = 'aaaa1111-2222-4333-8444-555555555508';
+const UUID_SALIR = 'aaaa1111-2222-4333-8444-555555555504';
+const UUID_MIEMBROS = 'aaaa1111-2222-4333-8444-555555555505';
+const UUID_MIOS_A = 'aaaa1111-2222-4333-8444-555555555506';
+const UUID_MIOS_B = 'aaaa1111-2222-4333-8444-555555555507';
+
+/** Supabase falso: las dos tablas de equipo y el alta por código. */
+function crearNubeDeEquipos() {
+  const tablas = new Map();
+  const llamadas = [];
+  let contador = 0;
+  const usuario = { id: USUARIO };
+
+  const tabla = (nombre) => {
+    if (!tablas.has(nombre)) tablas.set(nombre, new Map());
+    return tablas.get(nombre);
+  };
+  const listar = (nombre) => [...tabla(nombre).values()];
+  const claveDe = (nombre, fila) => (nombre === 'horus_team_members'
+    ? `${fila.team_id}|${fila.user_id}`
+    : String(fila.id));
+  const guardar = (nombre, fila) => { tabla(nombre).set(claveDe(nombre, fila), fila); return fila; };
+  const nuevoUuid = () => `f0000000-0000-4000-8000-${String(++contador).padStart(12, '0')}`;
+
+  /** Filtros de PostgREST que usa `teams.js`: `eq.` e `in.(...)`. */
+  function coincide(fila, params) {
+    for (const [campo, valor] of params.entries()) {
+      if (['select', 'order', 'limit'].includes(campo)) continue;
+      if (valor.startsWith('eq.')) {
+        if (String(fila[campo]) !== valor.slice(3)) return false;
+      } else if (valor.startsWith('in.(')) {
+        const lista = valor.slice(4, -1).split(',').map((s) => s.replace(/"/g, ''));
+        if (!lista.includes(String(fila[campo]))) return false;
+      }
+    }
+    return true;
+  }
+
+  function insertar(nombre, cuerpo) {
+    const creadas = [];
+    for (const original of cuerpo) {
+      const fila = { ...original };
+      if (nombre === 'horus_teams') {
+        if (!fila.id) fila.id = nuevoUuid();
+        if (listar(nombre).some((t) => t.invite_code === fila.invite_code && t.id !== fila.id)) {
+          return { error: { status: 409, message: 'duplicate key value violates unique constraint "horus_teams_invite_code_key"' } };
+        }
+        // El trigger del servidor rellena el ámbito desde el id del equipo.
+        fila.owner_key = `team:${fila.id}`;
+        fila.deleted = false;
+      } else if (nombre === 'horus_team_members') {
+        fila.owner_key = `team:${fila.team_id}`;
+        fila.deleted = fila.deleted === true;
+        if (tabla(nombre).has(claveDe(nombre, fila))) {
+          return { error: { status: 409, message: 'duplicate key value violates unique constraint "horus_team_members_pkey"' } };
+        }
+      }
+      guardar(nombre, fila);
+      creadas.push(fila);
+    }
+    return { creadas };
+  }
+
+  /** `horus_join_team(p_code)`: alta —o revivido— como `member`. */
+  function unirPorCodigo(codigo) {
+    const texto = String(codigo ?? '').trim();
+    const equipo = listar('horus_teams').find((t) => t.invite_code === texto && t.deleted !== true);
+    if (!equipo) return { error: { status: 400, message: 'HORUS: el código de invitación no es válido.' } };
+    const existente = listar('horus_team_members')
+      .find((m) => m.team_id === equipo.id && m.user_id === usuario.id);
+    if (existente) {
+      if (existente.deleted === true) {
+        existente.deleted = false;
+        existente.role = 'member';
+      }
+      return { equipo: equipo.id };
+    }
+    guardar('horus_team_members', {
+      team_id: equipo.id, user_id: usuario.id, role: 'member',
+      owner_key: `team:${equipo.id}`, deleted: false, joined_at: new Date().toISOString(),
+    });
+    return { equipo: equipo.id };
+  }
+
+  const ok = (json, status = 200) => ({
+    ok: true, status, headers: { get: () => null },
+    json: async () => json, text: async () => JSON.stringify(json),
+  });
+  const fallo = ({ status = 500, message = 'error' } = {}) => ({
+    ok: false, status, statusText: 'Error',
+    json: async () => ({ message }), text: async () => JSON.stringify({ message }),
+  });
+
+  async function fetchImpl(url, opts = {}) {
+    const metodo = String(opts.method || 'GET').toUpperCase();
+    const [ruta, consulta = ''] = String(url).split('?');
+    const params = new URLSearchParams(consulta);
+    llamadas.push({ metodo, url: String(url), cuerpo: opts.body ? JSON.parse(opts.body) : null });
+
+    if (ruta.includes('/rpc/horus_join_team')) {
+      const res = unirPorCodigo(opts.body ? JSON.parse(opts.body).p_code : '');
+      return res.error ? fallo(res.error) : ok(res.equipo);
+    }
+
+    const nombre = ruta.replace(/^.*\/rest\/v1\//, '');
+    if (metodo === 'POST') {
+      const res = insertar(nombre, JSON.parse(opts.body));
+      return res.error ? fallo(res.error) : ok(res.creadas, 201);
+    }
+    if (metodo === 'PATCH') {
+      const cambios = JSON.parse(opts.body);
+      for (const fila of listar(nombre).filter((f) => coincide(f, params))) Object.assign(fila, cambios);
+      return ok(null, 204);
+    }
+    if (metodo === 'DELETE') {
+      for (const fila of listar(nombre).filter((f) => coincide(f, params))) tabla(nombre).delete(claveDe(nombre, fila));
+      return ok(null, 204);
+    }
+    return ok(listar(nombre).filter((f) => coincide(f, params)));
+  }
+
+  return {
+    fetchImpl,
+    llamadas,
+    usuario,
+    listar,
+    nuevoUuid,
+    equipos: () => listar('horus_teams'),
+    miembros: () => listar('horus_team_members'),
+    filaMiembro: (teamId, userId) => listar('horus_team_members')
+      .find((m) => m.team_id === teamId && m.user_id === userId) || null,
+    sembrarEquipo: ({ id, name, invite_code, owner_id }) => guardar('horus_teams', {
+      id, name, invite_code, owner_id, owner_key: `team:${id}`, deleted: false,
+      created_at: new Date().toISOString(),
+    }),
+    sembrarMiembro: (teamId, userId, role) => guardar('horus_team_members', {
+      team_id: teamId, user_id: userId, role, owner_key: `team:${teamId}`,
+      deleted: false, joined_at: new Date().toISOString(),
+    }),
+    reset: () => { tablas.clear(); llamadas.length = 0; contador = 0; },
+  };
+}
+
+const nube = crearNubeDeEquipos();
+
+// Guardia: si algo intentara salir a la red de verdad, la prueba debe fallar de
+// forma ruidosa en vez de pasar en falso.
+globalThis.fetch = async (url, opts) => {
+  const destino = String(url);
+  if (!/supabase\.co/.test(destino)) throw new Error(`salida a la red inesperada: ${destino}`);
+  return nube.fetchImpl(destino, opts);
+};
+
+/** Sesión falsa (o ninguna) antes de crear el store. */
+function sesionFalsa(activa = true) {
+  storageMod.saveSession(activa
+    ? {
+      userId: USUARIO, email: 'ana@test', accessToken: 'tok', refreshToken: 'ref',
+      expiresAt: Date.now() + 3600000,
+    }
+    : null);
+  authMod.restoreSession();
+}
+
+/** Un cuadrante sencillo, en el ámbito del equipo indicado. */
+function docDeEquipo(teamId) {
+  const doc = oneDayDoc();
+  doc.teamId = teamId || null;
+  return doc;
+}
+
+/** Monta las vistas, deja Ajustes en pantalla y espera a la consulta del rol. */
+async function montarEnAjustes(store, espera = 60) {
+  mountAll(store);
+  contextMod.setCurrentView('settings');
+  contextMod.renderCurrent();
+  await sleep(espera);
+}
+
+/**
+ * Cierra los diálogos que hayan quedado abiertos de pruebas anteriores.
+ * Se busca por etiqueta y se mira la propiedad `open`: en el DOM de pruebas el
+ * atributo `open` no se refleja solo, así que `dialog[open]` no encontraría nada.
+ */
+function cerrarDialogos() {
+  for (const dialogo of env.document.querySelectorAll('dialog')) {
+    if (dialogo.open) dialogo.close();
+  }
+}
+
+await itAsync('crear un equipo desde Ajustes deja el documento en ámbito de equipo', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store);
+
+  is(store.doc.teamId, null, 'se empieza en modo personal');
+  env.document.getElementById('settings-team-create').click();
+  ok(env.document.getElementById('dialog-confirm').open, 'se abre el diálogo de creación');
+  const mensaje = env.document.getElementById('confirm-message').textContent;
+  ok(mensaje.includes('pasará a ser el del equipo'), 'el aviso del cuadrante está por escrito');
+  ok(mensaje.includes('cuadrante personal seguirá guardado'), 'y dice que el personal no se pierde');
+
+  env.document.getElementById('settings-team-name').value = 'Cuadrante de mañanas';
+  env.document.getElementById('confirm-ok').click();
+  await sleep(80);
+
+  const equipo = nube.equipos()[0];
+  ok(equipo, 'el equipo se ha creado en el servidor');
+  is(equipo.name, 'Cuadrante de mañanas');
+  is(equipo.owner_id, USUARIO, 'el creador es el dueño');
+  is(equipo.owner_key, `team:${equipo.id}`, 'el ámbito lo rellena el servidor');
+  is(store.doc.teamId, equipo.id, 'y el documento queda en el ámbito del equipo');
+
+  const pertenencia = nube.filaMiembro(equipo.id, USUARIO);
+  ok(pertenencia, 'el creador queda dado de alta');
+  is(pertenencia.role, 'owner', 'como propietario');
+  is(teamsMod.rolConocido(equipo.id), 'owner', 'y la app lo sabe ya');
+});
+
+await itAsync('entrar con un código mete al usuario en el equipo y cambia el ámbito', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  nube.sembrarEquipo({ id: UUID_ENTRAR, name: 'Turnos de tarde', invite_code: 'K7M2QP4R', owner_id: OTRO_USUARIO });
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store);
+
+  env.document.getElementById('settings-team-join').click();
+  ok(env.document.getElementById('dialog-confirm').open, 'se abre el diálogo del código');
+  env.document.getElementById('settings-team-code').value = 'K7M2QP4R';
+  env.document.getElementById('confirm-ok').click();
+  await sleep(80);
+
+  is(store.doc.teamId, UUID_ENTRAR, 'el documento pasa al equipo del código');
+  const pertenencia = nube.filaMiembro(UUID_ENTRAR, USUARIO);
+  ok(pertenencia, 'la pertenencia se ha creado');
+  is(pertenencia.role, 'member', 'se entra como miembro: por código no se puede ser dueño');
+  is(teamsMod.rolConocido(UUID_ENTRAR), 'member');
+});
+
+await itAsync('un código que no existe avisa y no cambia el ámbito', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store);
+
+  env.document.getElementById('settings-team-join').click();
+  env.document.getElementById('settings-team-code').value = 'NO-EXISTE';
+  env.document.getElementById('confirm-ok').click();
+  await sleep(80);
+
+  is(store.doc.teamId, null, 'el ámbito sigue siendo personal');
+  ok(env.document.getElementById('toasts').textContent.includes('código de invitación no es válido'),
+    'y se avisa con un mensaje claro');
+});
+
+await itAsync('sin sesión avisa en vez de romperse', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(false);
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 10);
+
+  ok(env.document.getElementById('settings-team-card').textContent.includes('Inicia sesión'),
+    'la tarjeta explica que hace falta una cuenta');
+
+  const antes = nube.llamadas.length;
+  env.document.getElementById('settings-team-create').click();
+  await sleep(20);
+  is(env.document.getElementById('dialog-confirm').open, false, 'no se abre ningún diálogo');
+  is(store.doc.teamId, null, 'el ámbito no cambia');
+  ok(env.document.getElementById('toasts').textContent.includes('Inicia sesión para crear un equipo'),
+    'y se avisa en pantalla');
+  is(nube.llamadas.length, antes, 'sin sesión no se llama a la red');
+
+  // Y la capa de datos tampoco lanza: devuelve un error en español.
+  const crear = await teamsMod.createTeam('Equipo sin sesión');
+  is(crear.ok, false);
+  ok(/sesión/i.test(crear.error), `el error habla de la sesión (${crear.error})`);
+  const entrar = await teamsMod.joinTeam('K7M2QP4R');
+  is(entrar.ok, false);
+  ok(/sesión/i.test(entrar.error), `y el de entrar también (${entrar.error})`);
+  is(nube.llamadas.length, antes, 'siguen sin salir peticiones');
+});
+
+await itAsync('con rol viewer la app entra en solo lectura: aviso visible y acciones desactivadas', async () => {
+  nube.reset();
+  env.reset();
+  cerrarDialogos();
+  sesionFalsa(true);
+  nube.sembrarEquipo({ id: UUID_SOLO_LECTURA, name: 'Equipo de consulta', invite_code: 'SOLO0001', owner_id: OTRO_USUARIO });
+  nube.sembrarMiembro(UUID_SOLO_LECTURA, USUARIO, 'viewer');
+  const store = storeMod.createStore(docDeEquipo(UUID_SOLO_LECTURA));
+
+  await montarEnAjustes(store);
+  is(teamsMod.rolConocido(UUID_SOLO_LECTURA), 'viewer', 'la app ha comprobado el rol contra el servidor');
+  renderAll();
+
+  // 1) El aviso se ve, y explica el porqué.
+  const aviso = env.document.getElementById('roster-readonly');
+  ok(!aviso.hidden, 'el aviso de solo lectura está visible');
+  ok(aviso.textContent.includes('Solo lectura'), 'y dice qué pasa');
+
+  // 2) Las acciones de escritura están DESACTIVADAS de verdad (atributo `disabled`).
+  for (const id of ['roster-import', 'roster-rotate', 'roster-pattern', 'roster-copyweek', 'roster-holiday']) {
+    is(env.document.getElementById(id).disabled, true, `${id} queda desactivado`);
+  }
+  is(env.document.getElementById('team-add').disabled, true, 'añadir persona, desactivado');
+  for (const id of ['settings-shift-types', 'settings-clear-schedule', 'settings-import-pdf', 'settings-import-csv']) {
+    is(env.document.getElementById(id).disabled, true, `${id} queda desactivado`);
+  }
+
+  // 3) Lo que NO escribe sigue disponible: quitarlo también sería mentir.
+  is(env.document.getElementById('roster-copy').disabled, false, 'copiar sigue disponible');
+  is(env.document.getElementById('roster-print').disabled, false, 'imprimir también');
+
+  // 4) Un clic en una casilla no abre el diálogo de asignar: lo explica.
+  const celda = env.document.querySelector('#roster-body td.shift-cell');
+  ok(celda, 'el cuadrante tiene casillas');
+  celda.click();
+  await sleep(20);
+  is(env.document.getElementById('dialog-assign').open, false, 'el diálogo de asignar no se abre');
+  ok(env.document.getElementById('toasts').textContent.includes('Solo lectura'), 'y se explica por qué');
+
+  // 5) Y el diálogo tampoco se abre llamándolo directamente (Calendario, Hoy…).
+  dialogs.openDayEditor(contextMod.getContext(), '2025-06-04');
+  await sleep(10);
+  is(env.document.getElementById('dialog-day').open, false, 'el editor del día tampoco se abre');
+});
+
+await itAsync('con rol owner o admin se puede editar', async () => {
+  const equipos = { owner: UUID_EDITAR_DUENO, admin: UUID_EDITAR_ADMIN };
+  for (const rol of ['owner', 'admin']) {
+    nube.reset();
+    env.reset();
+    cerrarDialogos();
+    sesionFalsa(true);
+    nube.sembrarEquipo({ id: equipos[rol], name: 'Equipo que edita', invite_code: `EDIT000${rol === 'owner' ? '1' : '2'}`, owner_id: OTRO_USUARIO });
+    nube.sembrarMiembro(equipos[rol], USUARIO, rol);
+    const store = storeMod.createStore(docDeEquipo(equipos[rol]));
+
+    await montarEnAjustes(store);
+    is(teamsMod.rolConocido(equipos[rol]), rol, `la app conoce el rol ${rol}`);
+    renderAll();
+
+    is(env.document.getElementById('roster-readonly').hidden, true, `sin aviso con ${rol}`);
+    is(env.document.getElementById('roster-import').disabled, false, `importar disponible con ${rol}`);
+    is(env.document.getElementById('roster-rotate').disabled, false, `rotar disponible con ${rol}`);
+    is(env.document.getElementById('team-add').disabled, false, `añadir persona con ${rol}`);
+    is(env.document.getElementById('settings-shift-types').disabled, false, `catálogo con ${rol}`);
+    is(env.document.getElementById('settings-clear-schedule').disabled, false, `borrar turnos con ${rol}`);
+
+    const celda = env.document.querySelector('#roster-body td.shift-cell');
+    celda.click();
+    const dialogo = env.document.getElementById('dialog-assign');
+    ok(dialogo.open, `el diálogo de asignar se abre con ${rol}`);
+    dialogo.close();
+  }
+});
+
+await itAsync('el dueño ve los miembros, cambia roles y rota el código', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  nube.sembrarEquipo({ id: UUID_MIEMBROS, name: 'Cuadrante de mañanas', invite_code: 'CODIGO01', owner_id: USUARIO });
+  nube.sembrarMiembro(UUID_MIEMBROS, USUARIO, 'owner');
+  nube.sembrarMiembro(UUID_MIEMBROS, OTRO_USUARIO, 'member');
+  const store = storeMod.createStore(docDeEquipo(UUID_MIEMBROS));
+  await montarEnAjustes(store);
+
+  const tarjeta = env.document.getElementById('settings-team-card');
+  ok(tarjeta.textContent.includes('Cuadrante de mañanas'), 'sale el nombre del equipo');
+  ok(tarjeta.textContent.includes('CODIGO01'), 'y el código de invitación');
+  ok(tarjeta.textContent.includes('Miembros (2)'), 'y cuántos miembros hay');
+
+  const selector = tarjeta.querySelector(`select[data-user-id="${OTRO_USUARIO}"]`);
+  ok(selector, 'el dueño tiene selector de rol para el otro miembro');
+  is(selector.value, 'member', 'con el rol actual marcado');
+  selector.value = 'viewer';
+  selector.dispatchEvent(new env.DOMEvent('change', { bubbles: true }));
+  await sleep(40);
+  is(nube.filaMiembro(UUID_MIEMBROS, OTRO_USUARIO).role, 'viewer', 'el rol se cambia de verdad');
+
+  // Un rol que no existe no se acepta.
+  const malo = await teamsMod.setMemberRole(UUID_MIEMBROS, OTRO_USUARIO, 'jefe');
+  is(malo.ok, false);
+  ok(/rol no existe/i.test(malo.error), `se rechaza con un mensaje claro (${malo.error})`);
+
+  // Rotar el código: pide confirmación y el viejo deja de valer.
+  tarjeta.querySelector('[data-team-action="rotar"]').click();
+  ok(env.document.getElementById('dialog-confirm').open, 'rotar el código pide confirmación');
+  env.document.getElementById('confirm-ok').click();
+  await sleep(40);
+  const equipo = nube.equipos().find((t) => t.id === UUID_MIEMBROS);
+  ok(equipo.invite_code !== 'CODIGO01', 'el código viejo ya no vale');
+  ok(/^[A-Z0-9]{8}$/.test(equipo.invite_code), `el nuevo tiene buena pinta (${equipo.invite_code})`);
+});
+
+await itAsync('myTeams() lista los equipos del usuario con su rol', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  nube.sembrarEquipo({ id: UUID_MIOS_A, name: 'Equipo propio', invite_code: 'PROPIO01', owner_id: USUARIO });
+  nube.sembrarEquipo({ id: UUID_MIOS_B, name: 'Equipo ajeno', invite_code: 'AJENO001', owner_id: OTRO_USUARIO });
+  nube.sembrarMiembro(UUID_MIOS_B, USUARIO, 'member');
+
+  const res = await teamsMod.myTeams();
+  ok(res.ok, `myTeams() no falla (${res.error || ''})`);
+  is(res.equipos.length, 2, 'salen los dos equipos');
+  const propio = res.equipos.find((e) => e.id === UUID_MIOS_A);
+  const ajeno = res.equipos.find((e) => e.id === UUID_MIOS_B);
+  is(propio.rol, 'owner', 'el equipo del que soy dueño sale como propietario (aunque no tenga fila de pertenencia)');
+  is(ajeno.rol, 'member', 'y el otro con mi rol de miembro');
+  is(propio.nombre, 'Equipo propio', 'con su nombre');
+  is(teamsMod.rolConocido(UUID_MIOS_A), 'owner', 'y deja el rol guardado para la interfaz');
+});
+
+await itAsync('salir del equipo devuelve el documento a modo personal', async () => {
+  const equipos = { member: UUID_SALIR, owner: 'aaaa1111-2222-4333-8444-555555555509' };
+  for (const rol of ['member', 'owner']) {
+    nube.reset();
+    env.reset();
+    cerrarDialogos();
+    sesionFalsa(true);
+    nube.sembrarEquipo({ id: equipos[rol], name: 'Equipo del que salgo', invite_code: `SALIR00${rol === 'member' ? '1' : '2'}`, owner_id: OTRO_USUARIO });
+    nube.sembrarMiembro(equipos[rol], USUARIO, rol);
+    const store = storeMod.createStore(docDeEquipo(equipos[rol]));
+    await montarEnAjustes(store);
+    is(store.doc.teamId, equipos[rol], `se empieza en el equipo (${rol})`);
+
+    const boton = env.document.getElementById('settings-team-card').querySelector('[data-team-action="salir"]');
+    ok(boton, 'existe «Salir del equipo»');
+    boton.click();
+    ok(env.document.getElementById('dialog-confirm').open, 'salir pide confirmación');
+    env.document.getElementById('confirm-ok').click();
+    await sleep(60);
+
+    is(store.doc.teamId, null, `el documento vuelve a modo personal (${rol})`);
+    is(teamsMod.rolConocido(equipos[rol]), null, `y la app olvida el rol (${rol})`);
+
+    const fila = nube.filaMiembro(equipos[rol], USUARIO);
+    if (rol === 'owner') {
+      ok(fila && fila.deleted === true, 'el dueño deja lápida, para que la baja llegue a los demás dispositivos');
+    } else {
+      is(fila, null, 'quien no es dueño borra su fila (es lo único que le deja el servidor)');
+    }
+  }
+});
+
+await itAsync('elegir un equipo de la lista pide confirmación antes de mover el cuadrante', async () => {
+  const UUID_LISTA = 'aaaa1111-2222-4333-8444-555555555510';
+  nube.reset();
+  env.reset();
+  cerrarDialogos();
+  sesionFalsa(true);
+  nube.sembrarEquipo({ id: UUID_LISTA, name: 'Equipo de la lista', invite_code: 'LISTA001', owner_id: OTRO_USUARIO });
+  nube.sembrarMiembro(UUID_LISTA, USUARIO, 'member');
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 80);
+
+  const tarjeta = env.document.getElementById('settings-team-card');
+  ok(tarjeta.textContent.includes('Equipo de la lista'), 'el equipo sale en la lista de los míos');
+  const boton = tarjeta.querySelector(`[data-team-action="usar"][data-team-id="${UUID_LISTA}"]`);
+  ok(boton, 'y tiene su botón para usarlo');
+
+  // Cancelar no mueve nada.
+  boton.click();
+  ok(env.document.getElementById('dialog-confirm').open, 'pide confirmación');
+  ok(env.document.getElementById('confirm-message').textContent.includes('pasará a ser el del equipo'),
+    'con el aviso por escrito de lo que pasa con el cuadrante');
+  env.document.getElementById('confirm-cancel').click();
+  await sleep(20);
+  is(store.doc.teamId, null, 'si se cancela, el ámbito no cambia');
+
+  // Aceptar sí.
+  boton.click();
+  env.document.getElementById('confirm-ok').click();
+  await sleep(40);
+  is(store.doc.teamId, UUID_LISTA, 'al aceptar, el cuadrante pasa al equipo');
+});
+
+/* ==================================================================== *
  * Informe
  * ==================================================================== */
 

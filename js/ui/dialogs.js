@@ -21,6 +21,7 @@ import {
 import { analyzeDate, summarize, findConflicts } from '../core/coverage.js';
 import * as exporter from '../core/exporter.js';
 import { REGIONS, holidaysFor } from '../core/holidays.js';
+import * as teams from '../core/teams.js';
 import {
   openDialog, closeDialog, confirmAction, toast, notify, typeBadge, avatar,
   colorPicker, switchControl, fillSelect, readNumber, emptyState,
@@ -34,6 +35,26 @@ const debounce = (fn, ms) => {
   let t = null;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
 };
+
+/**
+ * GUARDA DE SOLO LECTURA.
+ *
+ * Todos los diálogos de aquí escriben en el cuadrante. Si el rol del usuario en
+ * el equipo del documento no permite escribir (`viewer`, o un rol que la app no
+ * reconoce), no se abre el diálogo: se explica por qué. La seguridad de verdad
+ * la impone el servidor con RLS; esto es para no ofrecer algo que va a fallar.
+ *
+ * Se pregunta a `core/teams.js`, que es el único sitio donde se decide qué
+ * puede hacer cada rol. Así el Calendario y la vista Hoy —que abren estos
+ * diálogos— quedan cubiertos sin tocar sus archivos.
+ *
+ * @returns {boolean} true si el diálogo NO debe abrirse
+ */
+function bloqueadoPorRol(ctx) {
+  if (!teams.soloLectura(ctx?.doc)) return false;
+  notify.warning(teams.motivoSoloLectura());
+  return true;
+}
 
 /** Cablea un <dialog>: cierre con backdrop, botones [data-close] y Escape. */
 export function wireDialog(dialog) {
@@ -65,6 +86,7 @@ let editingTypeId = null;
 let typeBlocksDraft = [];
 
 export function openTypeEditor(ctx, typeId = null, { onSaved = null } = {}) {
+  if (bloqueadoPorRol(ctx)) return;
   const { actions } = ctx;
   const dialog = byId('dialog-type');
   wireDialog(dialog);
@@ -228,6 +250,7 @@ function updateBlockPreview(row, block) {
 let editingMemberId = null;
 
 export function openMemberEditor(ctx, memberId = null, { onSaved = null } = {}) {
+  if (bloqueadoPorRol(ctx)) return;
   const { actions } = ctx;
   const dialog = byId('dialog-member');
   wireDialog(dialog);
@@ -382,6 +405,7 @@ const assignState = {
  *          rangeMode?:boolean, dates?:string[], skipExisting?:boolean}} [preset]
  */
 export function openAssignDialog(ctx, preset = {}) {
+  if (bloqueadoPorRol(ctx)) return;
   const { actions } = ctx;
   const dialog = byId('dialog-assign');
   wireDialog(dialog);
@@ -634,6 +658,7 @@ export function openAssignDialog(ctx, preset = {}) {
 let dayEditorDate = null;
 
 export function openDayEditor(ctx, date) {
+  if (bloqueadoPorRol(ctx)) return;
   const { actions } = ctx;
   const dialog = byId('dialog-day');
   wireDialog(dialog);
@@ -1000,6 +1025,7 @@ let patternCycle = [];
 let patternId = null;
 
 export function openPatternDialog(ctx, { memberId = null, mode = 'pattern' } = {}) {
+  if (bloqueadoPorRol(ctx)) return;
   const { actions } = ctx;
   const dialog = byId('dialog-pattern');
   wireDialog(dialog);

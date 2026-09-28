@@ -455,6 +455,82 @@ await it('borrar todos los datos devuelve al asistente', async () => {
 });
 
 /* ==================================================================== *
+ * 9. Solo lectura por rol (equipo)
+ *
+ * El rol del usuario en el equipo se guarda en el dispositivo (lo deja ahí la
+ * comprobación contra el servidor), así que se puede probar el arranque real
+ * sin red: es justo el caso de un móvil sin conexión que tiene que seguir
+ * sabiendo que no puede escribir.
+ * ==================================================================== */
+
+describe('Solo lectura por rol (equipo)');
+
+const teamsMod = await import('../js/core/teams.js');
+const TEAM_PRUEBA = 'aaaa1111-2222-4333-8444-555555555550';
+
+/** Deja en el dispositivo un cuadrante de equipo con el rol ya comprobado. */
+function sembrarEquipoConRol(rol) {
+  resetStorage();
+  const doc = model.bootstrapDocument({ name: 'Ana Ruiz', coworkers: ['Luis Peña'] });
+  doc.settings.firstRun = false;
+  doc.teamId = TEAM_PRUEBA;
+  const M = doc.shiftTypes.find((s) => s.code === 'M');
+  doc.entries = [model.createEntry({ memberId: doc.meId, date: '2025-06-04', typeId: M.id })];
+  localStorage.setItem(storage.KEY_DOC, JSON.stringify(doc));
+  teamsMod.guardarRolConocido(TEAM_PRUEBA, rol);
+}
+
+await it('con rol viewer la app avisa y desactiva lo que escribe', async () => {
+  sembrarEquipoConRol('viewer');
+  await bootFresh();
+  is(visibleScreen(), 'app', 'entra en la aplicación');
+
+  const banda = env.document.getElementById('readonly-banner');
+  ok(!banda.hidden, 'se ve la banda de solo lectura');
+  ok(banda.textContent.includes('Solo lectura'), 'y dice qué está pasando');
+
+  ctxNow().navigate('roster');
+  await sleep(40);
+  ok(!env.document.getElementById('roster-readonly').hidden, 'el cuadrante también avisa');
+  for (const id of ['roster-import', 'roster-rotate', 'roster-pattern', 'roster-copyweek', 'roster-holiday']) {
+    is(env.document.getElementById(id).disabled, true, `${id} queda desactivado`);
+  }
+
+  // La vista Equipo también se pinta al entrar en ella.
+  ctxNow().navigate('team');
+  await sleep(30);
+  is(env.document.getElementById('team-add').disabled, true, 'añadir persona queda desactivado');
+
+  // Un clic en una casilla no abre el editor: se explica por qué.
+  const celda = env.document.querySelector('#roster-body td.shift-cell');
+  ok(celda, 'hay casillas en el cuadrante');
+  celda.click();
+  await sleep(20);
+  is(env.document.getElementById('dialog-assign').open, false, 'el diálogo de asignar no se abre');
+});
+
+await it('con rol owner no hay aviso y se puede editar', async () => {
+  sembrarEquipoConRol('owner');
+  await bootFresh();
+  is(visibleScreen(), 'app', 'entra en la aplicación');
+  is(env.document.getElementById('readonly-banner').hidden, true, 'sin banda de solo lectura');
+
+  ctxNow().navigate('roster');
+  await sleep(40);
+  is(env.document.getElementById('roster-readonly').hidden, true, 'sin aviso en el cuadrante');
+  is(env.document.getElementById('roster-import').disabled, false, 'importar sigue disponible');
+
+  ctxNow().navigate('team');
+  await sleep(30);
+  is(env.document.getElementById('team-add').disabled, false, 'añadir persona sigue disponible');
+
+  ctxNow().openAssign({ date: '2025-06-05', memberIds: [ctxNow().doc.meId] });
+  const dialogo = env.document.getElementById('dialog-assign');
+  ok(dialogo.open, 'el diálogo de asignar se abre con permiso de escritura');
+  dialogo.close();
+});
+
+/* ==================================================================== *
  * Informe
  * ==================================================================== */
 

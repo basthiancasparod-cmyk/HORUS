@@ -82,6 +82,19 @@ son otras:
 - Importación de un cuadrante desde CSV (con cabeceras flexibles y fechas en
   varios formatos).
 
+**Equipos (cuadrante compartido)**
+- Un equipo es **un cuadrante para varias personas**: cada una entra con su
+  cuenta y todas ven y editan el mismo cuadrante, con los turnos de todas.
+- Se crea desde **Ajustes → Equipo → «Crear un equipo»**, y se entra en el de
+  otra persona con **«Entrar con un código»** y el código de invitación que te
+  pase quien lo creó.
+- **Roles**: propietario, administrador, miembro y solo lectura. El rol decide
+  lo que se puede tocar y lo impone el servidor (RLS), no el navegador.
+  Con «solo lectura» la app lo avisa y deja los botones desactivados.
+- Cambiar de personal a equipo (y volver) se hace desde Ajustes → Equipo, con un
+  aviso por escrito de qué pasa con el cuadrante. **Nada se borra**: el cuadrante
+  personal sigue guardado en la nube por si quieres volver.
+
 **Extras**
 - Festivos de las 19 comunidades autónomas, calculados (incluidos los de Semana
   Santa) y editables uno a uno.
@@ -124,6 +137,37 @@ Crea una cuenta desde la propia pantalla de acceso. A partir de ahí, el cuadran
 se sincroniza entre tus dispositivos. Detalles en
 [`supabase/README.md`](supabase/README.md), incluido el SQL que hay que aplicar.
 
+### Cuadrante de equipo (opcional)
+
+Con cuenta, el cuadrante puede ser **de un equipo** en vez de personal. Todo se
+hace desde **Ajustes → Equipo**:
+
+1. **Crear un equipo**: pide un nombre y crea el equipo con su **código de
+   invitación**. Quien lo crea queda como **propietario**.
+2. **Entrar con un código**: pega el código que te hayan pasado. Se entra como
+   **miembro**; los roles altos los da el propietario.
+3. En la tarjeta del equipo se ve el **código** (con un botón para copiarlo), la
+   **lista de miembros con su rol** y los botones para **salir del equipo** o
+   **volver a modo personal**.
+
+Antes de mover el cuadrante, la aplicación lo dice por escrito: lo que tienes en
+este dispositivo pasa a ser el del equipo y se sube a la nube; si el equipo ya
+tenía turnos, los que coincidan se sobrescriben; y **tu cuadrante personal sigue
+guardado en la nube** por si quieres volver. Las filas del ámbito anterior no se
+borran nunca.
+
+Los **roles** son `propietario`, `administrador`, `miembro` y `solo lectura`:
+
+| Rol | Qué puede hacer |
+|---|---|
+| propietario | todo: el cuadrante, el equipo (nombre y código) y los roles |
+| administrador | editar el cuadrante completo |
+| miembro | hoy también edita el cuadrante (es interino: cuando existan las peticiones de cambio, solo podrá pedir) |
+| solo lectura | mirar: la app avisa y deja todo lo que escribe desactivado |
+
+Lo que de verdad manda es el servidor: aunque la interfaz fallara, la base de
+datos rechaza lo que el rol no permite.
+
 ---
 
 ## Estructura del proyecto
@@ -147,6 +191,7 @@ js/
     storage.js        Persistencia local, copias rotativas, migración
     coverage.js       Motor de cobertura, huecos, quién trabaja ahora, horas
     sync.js           Sincronización por tablas y resolución de conflictos
+    teams.js          Equipos: crear, entrar con un código, roles y miembros
     auth.js           Sesión contra Supabase
     exporter.js       JSON, CSV, iCal y texto
     reminders.js      Avisos de turno
@@ -193,10 +238,10 @@ npm run check:sql  # solo el orden de las definiciones de la migración
 | Suite | Qué comprueba | Pruebas |
 |---|---|---|
 | `tests/run.js` | Núcleo: fechas, modelo, cobertura, store, persistencia, utilidades | 111 |
-| `tests/io.js` | Exportación/importación, sincronización (con un Supabase falso) y avisos | 66 |
+| `tests/io.js` | Exportación/importación, sincronización (con un Supabase falso) y avisos | 77 |
 | `tests/scenario.js` | Un equipo real: 5 personas, rotaciones, noche, festivos y rendimiento | 81 |
-| `tests/smoke.mjs` | Las 6 vistas montadas sobre el `index.html` real, con clics y diálogos | 65 |
-| `tests/app.mjs` | Arranque real: asistente, uso, recarga, migración, exportación | 21 |
+| `tests/smoke.mjs` | Las 6 vistas montadas sobre el `index.html` real, con clics y diálogos, y la gestión de equipos por rol | 86 |
+| `tests/app.mjs` | Arranque real: asistente, uso, recarga, migración, exportación y solo lectura por rol | 23 |
 | `tests/import.mjs` | Importación del cuadrante desde un PDF real: lectura, rejilla, verdad de referencia y volcado | 30 |
 | `tools/check.mjs` | Enlazado de módulos, ids del HTML, clases CSS, precache, manifiesto | — |
 | `tools/sql-order.mjs` | Orden de las definiciones de la migración de Supabase (evita el `42P01`) | — |

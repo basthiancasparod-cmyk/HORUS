@@ -7,13 +7,14 @@
  * registro de «ya cableado») y el pintado solo sincroniza valores y visibilidad.
  */
 
-import { byId, el, clear, icon, $$, debounce, formatBytes } from '../../core/utils.js';
+import { byId, el, clear, icon, $$, debounce, formatBytes, copyToClipboard } from '../../core/utils.js';
 import {
   todayKey, monthKeyOf, monthDays, formatShortDate, blockMinutes, formatBlocks,
 } from '../../core/date.js';
 import * as storage from '../../core/storage.js';
 import { AI_PROVIDERS } from '../../core/ai-vision.js';
 import * as auth from '../../core/auth.js';
+import * as teams from '../../core/teams.js';
 import { cloudConfig, setCloudConfig, hasOwnCloudConfig, APP, DEFAULT_CLOUD } from '../../config.js';
 import * as exporter from '../../core/exporter.js';
 import { DATA_NOTES } from '../../core/holidays.js';
@@ -97,10 +98,22 @@ export function mount(ctx) {
     signout: byId('settings-signout'),
     reset: byId('settings-reset'),
     about: byId('settings-about'),
+
+    /* Equipo */
+    teamIntro: byId('settings-team-intro'),
+    teamCard: byId('settings-team-card'),
+    teamActions: byId('settings-team-actions'),
+    teamCreate: byId('settings-team-create'),
+    teamJoin: byId('settings-team-join'),
   };
 
   fillRegionSelect(refs.region, 'ES');
   wireSettings();
+
+  // Al montar la vista se vuelve a mirar el equipo: montar significa que la
+  // aplicación acaba de arrancar (o que se ha reemplazado el store), y lo que
+  // se sabía antes puede ser de otro momento.
+  teamData.clave = null;
 
   registerRenderer(VIEW, render);
       // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
@@ -186,6 +199,9 @@ function wireSettings() {
 
   once('shiftSunday', () => {
     const control = switchControl('settings-shift-sunday', true, (checked) => {
+      // Este interruptor escribe en el documento compartido: con rol de solo
+      // lectura no se cambia (un <div> no se puede «desactivar» de verdad).
+      if (bloqueadoPorRol()) return;
       live.actions.updateSettings({ holidays: { shiftSundayToMonday: checked } });
       notify.info(checked
         ? 'Los festivos que caigan en domingo se pasarán al lunes'
@@ -508,6 +524,17 @@ function wireSettings() {
       const days = monthDays(monthKey);
       openExportDialog(live, { from: days[0], to: days[days.length - 1] });
     });
+  });
+
+  /* ---------- Equipo ---------- */
+
+  once('team', () => {
+    refs.teamCreate.addEventListener('click', () => crearEquipo());
+    refs.teamJoin.addEventListener('click', () => entrarConCodigo());
+    // La tarjeta del equipo se reconstruye entera en cada pintado, así que sus
+    // botones se atienden por delegación desde un contenedor que no cambia.
+    refs.teamCard.addEventListener('click', onTeamCardClick);
+    refs.teamCard.addEventListener('change', onTeamCardChange);
   });
 
   /* ---------- Peligro ---------- */
@@ -1049,6 +1076,533 @@ function readableOnHex(hex) {
 }
 
 /* ------------------------------------------------------------------ *
+ * EQUIPO
+ *
+ * Toda la gestión de equipos vive aquí, en Ajustes, y no en la vista
+ * «Equipo»: esa es de personas y turnos, y mezclarlas confundiría.
+ *
+ * Qué se decide en cada sitio:
+ *   · El ROL (quién puede escribir) se decide en `core/teams.js`, que es el
+ *     único sitio donde está esa verdad. Aquí solo se pinta lo que dice.
+ *   · El ÁMBITO del documento lo cambia SIEMPRE `actions.changeScope()`, que
+ *     además reinicia el estado de sincronización. Aquí no se toca `doc.teamId`.
+ * ------------------------------------------------------------------ */
+
+/** Texto del paso delicado: qué le pasa al cuadrante al irse a un equipo. */
+const AVISO_MUDANZA = 'Tu cuadrante de este dispositivo pasará a ser el del equipo y se subirá a la nube. '
+  + 'Si el equipo ya tenía turnos, los que coincidan se sobrescribirán. '
+  + 'Tu cuadrante personal seguirá guardado en la nube por si quieres volver.';
+
+/** El mismo aviso, al revés: del equipo al cuadrante personal. */
+const AVISO_VUELTA = 'Tu cuadrante de este dispositivo pasará a ser tu cuadrante personal y se subirá a la nube. '
+  + 'Si tu cuadrante personal ya tenía turnos, los que coincidan se sobrescribirán. '
+  + 'El cuadrante del equipo seguirá guardado en la nube para el resto del equipo.';
+
+/**
+ * Lo que se ha podido leer del equipo del documento (o de los equipos del
+ * usuario). Se pinta de aquí y se refresca en segundo plano: pintar es
+ * síncrono y no puede esperar a la red.
+ */
+const teamData = {
+  clave: null,      // 'personal' o el uuid del equipo que se ha consultado
+  cargando: false,
+  error: null,
+  rol: null,        // rol conocido del usuario en el equipo del documento
+  equipo: null,
+  miembros: [],
+  equipos: [],      // equipos del usuario (solo en modo personal)
+};
+
+/** Refresca lo que se sabe del equipo cuando el documento cambia de ámbito. */
+async function cargarEquipo(clave) {
+  teamData.clave = clave;
+  teamData.error = null;
+  teamData.equipo = null;
+  teamData.miembros = [];
+  teamData.equipos = [];
+  teamData.rol = clave === 'personal' ? null : teams.rolConocido(clave);
+
+  if (!auth.isSignedIn()) {
+    // Sin cuenta no hay equipos que consultar: se explica en la tarjeta.
+    teamData.cargando = false;
+    invalidate(VIEW);
+    return;
+  }
+
+  teamData.cargando = true;
+  invalidate(VIEW);
+
+  try {
+    if (clave === 'personal') {
+      const res = await teams.myTeams();
+      if (teamData.clave !== clave) return;
+      if (!res.ok) teamData.error = res.error;
+      else teamData.equipos = res.equipos;
+    } else {
+      const situacion = await teams.miSituacionEnEquipo(clave);
+      if (teamData.clave !== clave) return;
+      if (!situacion.ok) {
+        teamData.error = situacion.error;
+      } else {
+        teamData.equipo = situacion.equipo;
+        teamData.rol = situacion.rol;
+        const lista = await teams.teamMembers(clave);
+        if (teamData.clave !== clave) return;
+        if (lista.ok) teamData.miembros = lista.miembros;
+        else teamData.error = lista.error;
+      }
+    }
+  } catch (err) {
+    teamData.error = `No se pudo consultar el equipo: ${err.message}`;
+  } finally {
+    if (teamData.clave === clave) teamData.cargando = false;
+  }
+  invalidate(VIEW);
+}
+
+/**
+ * Fila de aviso con el icono de la casa (nunca `innerHTML`).
+ * @param {'error'|'info'} tipo color del aviso (rojo o informativo)
+ */
+function aviso(iconName, texto, tipo = 'error') {
+  return el('div', { class: `gap-item gap-item-${tipo}` }, [
+    icon(iconName, 16),
+    el('div', { class: 'grow' }, texto),
+  ]);
+}
+
+/** La tarjeta de Ajustes → Equipo. Pinta el modo personal o el de equipo. */
+function paintTeam(ctx = live) {
+  const card = refs.teamCard;
+  if (!card) return;
+
+  const doc = ctx.doc;
+  const teamId = doc.teamId || null;
+  const clave = teamId || 'personal';
+  if (teamData.clave !== clave) cargarEquipo(clave);
+
+  const rol = teamId ? (teamData.rol ?? teams.rolConocido(teamId)) : null;
+  const solo = teams.soloLectura(doc);
+
+  clear(card);
+
+  if (!teamId) {
+    refs.teamIntro.textContent = 'Un equipo es un cuadrante compartido: cada persona entra con su cuenta '
+      + 'y todos ven el mismo cuadrante. Lo que tienes en este dispositivo se queda como tu cuadrante personal.';
+    if (refs.teamActions) refs.teamActions.hidden = false;
+    card.appendChild(tarjetaPersonal());
+    return;
+  }
+
+  refs.teamIntro.textContent = `Este cuadrante es el de un equipo${teamData.equipo ? ` («${teamData.equipo.nombre}»)` : ''}.`;
+  if (refs.teamActions) refs.teamActions.hidden = true;
+  card.appendChild(tarjetaEquipo({ teamId, rol, solo }));
+}
+
+/** Modo personal: explicación y lista de equipos a los que ya pertenece. */
+function tarjetaPersonal() {
+  const cuerpo = el('div', { class: 'card-body stack-sm' });
+
+  if (!auth.isSignedIn()) {
+    cuerpo.appendChild(el('p', { class: 'field-hint' },
+      'Inicia sesión, en «Cuenta y nube», para crear un equipo o entrar en uno con un código.'));
+    return cuerpo;
+  }
+
+  if (teamData.error) cuerpo.appendChild(aviso('alert', teamData.error));
+
+  if (teamData.equipos.length) {
+    cuerpo.appendChild(el('div', { class: 'section-label' }, 'Tus equipos'));
+    for (const equipo of teamData.equipos) {
+      cuerpo.appendChild(el('div', { class: 'setting-row' }, [
+        el('div', { class: 'grow' }, [
+          el('div', { class: 'label t-truncate' }, equipo.nombre),
+          el('div', { class: 'sub' }, `Tu rol: ${teams.etiquetaRol(equipo.rol)}`),
+        ]),
+        el('button', {
+          type: 'button', class: 'btn btn-sm',
+          'data-team-action': 'usar', 'data-team-id': equipo.id,
+          'aria-label': `Pasar este cuadrante al equipo ${equipo.nombre}`,
+        }, 'Usar este cuadrante'),
+      ]));
+    }
+  } else if (teamData.cargando) {
+    cuerpo.appendChild(el('p', { class: 'field-hint' }, 'Buscando tus equipos…'));
+  } else if (!teamData.error) {
+    cuerpo.appendChild(el('p', { class: 'field-hint' }, 'Todavía no perteneces a ningún equipo.'));
+  }
+
+  return cuerpo;
+}
+
+/** Modo equipo: nombre, código, miembros, roles y salida. */
+function tarjetaEquipo({ rol, solo }) {
+  const cuerpo = el('div', { class: 'card-body stack-sm' });
+  const equipo = teamData.equipo;
+
+  cuerpo.appendChild(el('div', { class: 'row-between' }, [
+    el('div', { class: 'grow' }, [
+      el('div', { class: 't-md t-semibold t-truncate' }, equipo?.nombre || 'Tu equipo'),
+      el('div', { class: 'field-hint' }, solo
+        ? 'Tu rol: Solo lectura. Puedes consultarlo, pero no modificarlo.'
+        : `Tu rol: ${teams.etiquetaRol(rol)}.`),
+    ]),
+    el('span', { class: 'badge' }, teams.etiquetaRol(rol)),
+  ]));
+
+  if (solo) cuerpo.appendChild(aviso('info', teams.motivoSoloLectura(), 'info'));
+  if (teamData.cargando && !equipo) {
+    cuerpo.appendChild(el('p', { class: 'field-hint' }, 'Comprobando tu rol y los miembros del equipo…'));
+  }
+  if (teamData.error) cuerpo.appendChild(aviso('alert', teamData.error));
+
+  if (equipo?.codigo) {
+    const botones = [
+      el('code', { class: 'badge t-mono' }, equipo.codigo),
+      el('button', {
+        type: 'button', class: 'btn btn-sm', 'data-team-action': 'copiar',
+        'aria-label': 'Copiar el código de invitación',
+      }, 'Copiar'),
+    ];
+    if (teams.puedeRotarCodigo(rol)) {
+      botones.push(el('button', { type: 'button', class: 'btn btn-sm', 'data-team-action': 'rotar' }, 'Cambiar el código'));
+    }
+    cuerpo.appendChild(el('div', { class: 'setting-row' }, [
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'label' }, 'Código de invitación'),
+        el('div', { class: 'sub' }, 'Quien lo tenga puede entrar en el equipo como miembro.'),
+      ]),
+      el('div', { class: 'row wrap', style: { gap: 'var(--sp-2)', alignItems: 'center' } }, botones),
+    ]));
+  }
+
+  cuerpo.appendChild(el('div', { class: 'section-label' }, `Miembros (${teamData.miembros.length})`));
+  if (!teamData.miembros.length) {
+    cuerpo.appendChild(el('p', { class: 'field-hint' },
+      teamData.cargando ? 'Leyendo los miembros…' : 'No se han podido leer los miembros del equipo.'));
+  }
+  for (const miembro of teamData.miembros) {
+    const esDueno = !!equipo?.ownerId && miembro.userId === equipo.ownerId;
+    const nombre = miembro.esYo
+      ? (auth.currentUser()?.email || 'Tú')
+      : `Cuenta ${miembro.userId.slice(0, 8)}…`;
+    const derecha = (teams.puedeCambiarRoles(rol) && !esDueno)
+      ? selectorRol(miembro)
+      : el('span', { class: 'badge' }, `${teams.etiquetaRol(miembro.rol)}${esDueno ? ' · dueño' : ''}`);
+    cuerpo.appendChild(el('div', { class: 'setting-row' }, [
+      el('div', { class: 'grow' }, [
+        el('div', { class: 'label t-truncate' }, miembro.esYo ? `${nombre} (esta cuenta)` : nombre),
+      ]),
+      derecha,
+    ]));
+  }
+  if (teamData.miembros.length) {
+    // Qué puede hacer quien mira, dicho sin rodeos (y siempre en un solo sitio:
+    // `core/teams.js`).
+    const quienCambia = teams.puedeCambiarRoles(rol)
+      ? 'Puedes cambiar el rol con el desplegable de cada persona.'
+      : (teams.puedeGestionarEquipo(rol)
+        ? 'Puedes editar el cuadrante, pero los roles los cambia el propietario del equipo.'
+        : 'Solo el propietario del equipo puede cambiar los roles.');
+    cuerpo.appendChild(el('p', { class: 'field-hint' },
+      'El servidor no deja leer los correos de los demás miembros desde la app, '
+      + `así que se identifican por su cuenta. ${quienCambia}`));
+  }
+
+  cuerpo.appendChild(el('div', { class: 'row wrap', style: { gap: 'var(--sp-2)', marginTop: 'var(--sp-3)' } }, [
+    el('button', { type: 'button', class: 'btn btn-sm btn-danger', 'data-team-action': 'salir' }, 'Salir del equipo'),
+    el('button', { type: 'button', class: 'btn btn-sm', 'data-team-action': 'personal' }, 'Volver a modo personal'),
+  ]));
+
+  return cuerpo;
+}
+
+/** Selector de rol de un miembro (solo lo pinta el dueño del equipo). */
+function selectorRol(miembro) {
+  const select = el('select', {
+    class: 'select',
+    'data-team-action': 'rol',
+    'data-user-id': miembro.userId,
+    'aria-label': `Rol de la cuenta ${miembro.userId.slice(0, 8)}`,
+  }, teams.ROLES.map((rol) => el('option', { value: rol }, teams.etiquetaRol(rol))));
+  select.value = miembro.rol;
+  return select;
+}
+
+/* ---------- Acciones de la tarjeta ---------- */
+
+function onTeamCardClick(event) {
+  const boton = event.target instanceof Element ? event.target.closest('[data-team-action]') : null;
+  if (!boton) return;
+  switch (boton.dataset.teamAction) {
+    case 'usar': usarEquipo(boton.dataset.teamId); break;
+    case 'copiar': copiarCodigoInvitacion(); break;
+    case 'rotar': rotarCodigoInvitacion(); break;
+    case 'salir': salirDelEquipo(); break;
+    case 'personal': volverAModoPersonal(); break;
+    default: break; // el <select> de rol va por `change`
+  }
+}
+
+async function onTeamCardChange(event) {
+  const select = event.target instanceof Element ? event.target.closest('select[data-team-action="rol"]') : null;
+  if (!select) return;
+  const userId = select.dataset.userId;
+  const rol = select.value;
+  const teamId = live.doc.teamId;
+  if (!teamId || !userId) return;
+
+  const res = await teams.setMemberRole(teamId, userId, rol);
+  if (!res.ok) {
+    notify.error(res.error);
+    invalidate(VIEW); // vuelve a pintar el rol que de verdad hay
+    return;
+  }
+  const miembro = teamData.miembros.find((m) => m.userId === userId);
+  if (miembro) miembro.rol = rol;
+  notify.success(`Rol actualizado: ahora es ${teams.etiquetaRol(rol)}.`);
+  invalidate(VIEW);
+}
+
+/** Crea un equipo y pasa el cuadrante a él. */
+async function crearEquipo() {
+  if (!auth.isSignedIn()) {
+    notify.warning('Inicia sesión para crear un equipo.');
+    return;
+  }
+  const campo = el('div', { class: 'field' }, [
+    el('label', { class: 'field-label', for: 'settings-team-name' }, 'Nombre del equipo'),
+    el('input', {
+      class: 'input', type: 'text', id: 'settings-team-name', maxlength: '60',
+      placeholder: 'Ej.: Cuadrante de mañanas',
+    }),
+  ]);
+  const ok = await confirmAction({
+    title: 'Crear un equipo',
+    message: `${AVISO_MUDANZA} Ponle un nombre y se creará con su código de invitación.`,
+    confirmLabel: 'Crear el equipo',
+    danger: false,
+    extra: campo,
+  });
+  if (!ok) return;
+
+  const nombre = (byId('settings-team-name')?.value || '').trim();
+  if (!nombre) {
+    notify.error('El equipo necesita un nombre.');
+    return;
+  }
+
+  const res = await teams.createTeam(nombre);
+  if (!res.ok) {
+    notify.error(res.error);
+    return;
+  }
+  pasarAlEquipo(res.equipo.id, res.equipo.nombre, { yaConfirmado: true });
+}
+
+/** Entra en un equipo con un código y pasa el cuadrante a él. */
+async function entrarConCodigo() {
+  if (!auth.isSignedIn()) {
+    notify.warning('Inicia sesión para entrar en un equipo.');
+    return;
+  }
+  const campo = el('div', { class: 'field' }, [
+    el('label', { class: 'field-label', for: 'settings-team-code' }, 'Código de invitación'),
+    el('input', {
+      class: 'input', type: 'text', id: 'settings-team-code', maxlength: '40',
+      placeholder: 'Ej.: K7M2QP4R', autocapitalize: 'characters', autocomplete: 'off',
+    }),
+  ]);
+  const ok = await confirmAction({
+    title: 'Entrar con un código',
+    message: `${AVISO_MUDANZA} Escribe el código que te ha pasado quien creó el equipo.`,
+    confirmLabel: 'Entrar en el equipo',
+    danger: false,
+    extra: campo,
+  });
+  if (!ok) return;
+
+  const codigo = (byId('settings-team-code')?.value || '').trim();
+  if (!codigo) {
+    notify.error('Escribe el código de invitación.');
+    return;
+  }
+
+  const res = await teams.joinTeam(codigo);
+  if (!res.ok) {
+    notify.error(res.error);
+    return;
+  }
+  pasarAlEquipo(res.equipo.id, res.equipo.nombre, { yaConfirmado: true });
+}
+
+/** Pasa el cuadrante al equipo indicado, con la confirmación del paso delicado. */
+async function usarEquipo(teamId) {
+  if (!teamId) return;
+  const equipo = teamData.equipos.find((e) => e.id === teamId);
+  const nombre = equipo?.nombre || 'ese equipo';
+  pasarAlEquipo(teamId, nombre, { yaConfirmado: false });
+}
+
+/**
+ * El paso delicado: cambiar el ámbito del documento.
+ *
+ * Se avisa POR ESCRITO de lo que va a pasar con el cuadrante. Las filas del
+ * ámbito anterior NO se borran (lo garantiza `changeScope`), así que el
+ * cuadrante personal sigue en la nube y se puede volver.
+ */
+async function pasarAlEquipo(teamId, nombre, { yaConfirmado = false } = {}) {
+  if (!yaConfirmado) {
+    const ok = await confirmAction({
+      title: `¿Pasar el cuadrante al equipo «${nombre}»?`,
+      message: AVISO_MUDANZA,
+      confirmLabel: 'Pasar al equipo',
+      danger: false,
+    });
+    if (!ok) return;
+  }
+
+  const yaEstaba = (live.doc.teamId ?? null) === teamId;
+  if (!live.actions.changeScope(teamId)) {
+    if (yaEstaba) {
+      notify.info(`Este cuadrante ya es el del equipo «${nombre}».`);
+      return;
+    }
+    notify.error('No se ha cambiado de equipo: el identificador del equipo no es válido.');
+    return;
+  }
+  teamData.clave = null; // fuerza a releer el equipo nuevo
+  invalidate(VIEW);
+  notify.success(`Este cuadrante es ahora el del equipo «${nombre}».`, {
+    action: { label: 'Deshacer', onClick: () => live.undo() },
+  });
+}
+
+async function copiarCodigoInvitacion() {
+  const codigo = teamData.equipo?.codigo;
+  if (!codigo) {
+    notify.warning('No se ha podido leer el código del equipo.');
+    return;
+  }
+  const ok = await copyToClipboard(codigo);
+  if (ok) notify.success('Código de invitación copiado.');
+  else notify.warning(`Copia el código a mano: ${codigo}`);
+}
+
+async function rotarCodigoInvitacion() {
+  const teamId = live.doc.teamId;
+  if (!teamId) return;
+  const ok = await confirmAction({
+    title: '¿Cambiar el código de invitación?',
+    message: 'Se generará un código nuevo y el anterior dejará de valer al instante. '
+      + 'Quien ya esté dentro no se ve afectado.',
+    confirmLabel: 'Cambiar el código',
+  });
+  if (!ok) return;
+  const res = await teams.rotateInviteCode(teamId);
+  if (!res.ok) {
+    notify.error(res.error);
+    return;
+  }
+  if (teamData.equipo) teamData.equipo.codigo = res.codigo;
+  invalidate(VIEW);
+  notify.success('Código de invitación nuevo. El anterior ya no sirve.');
+}
+
+/** Salir del equipo: se deja de pertenecer y el cuadrante vuelve a personal. */
+async function salirDelEquipo() {
+  const teamId = live.doc.teamId;
+  if (!teamId) return;
+  const nombre = teamData.equipo?.nombre || 'este equipo';
+  const soyDueno = teamData.rol === 'owner';
+
+  const ok = await confirmAction({
+    title: `¿Salir del equipo «${nombre}»?`,
+    message: 'Se te quitará del equipo y dejarás de ver su cuadrante. El cuadrante personal de este dispositivo '
+      + 'vuelve a ser el tuyo, y el del equipo sigue guardado en la nube para el resto.'
+      + (soyDueno
+        ? ' Sigues siendo el propietario del equipo: para volver, entra otra vez con su código.'
+        : ''),
+    confirmLabel: 'Salir del equipo',
+  });
+  if (!ok) return;
+
+  const res = await teams.leaveTeam(teamId);
+  if (!res.ok) {
+    notify.error(res.error);
+    return;
+  }
+  live.actions.changeScope(null);
+  teamData.clave = null;
+  invalidate(VIEW);
+  notify.success(`Has salido del equipo «${nombre}». Este cuadrante vuelve a ser el personal.`, {
+    action: { label: 'Deshacer', onClick: () => live.undo() },
+  });
+}
+
+/** Volver al cuadrante personal sin dejar el equipo. */
+async function volverAModoPersonal() {
+  if (!live.doc.teamId) return;
+  const ok = await confirmAction({
+    title: '¿Volver a modo personal?',
+    message: `${AVISO_VUELTA} Seguirás perteneciendo al equipo.`,
+    confirmLabel: 'Volver a personal',
+    danger: false,
+  });
+  if (!ok) return;
+  if (!live.actions.changeScope(null)) return;
+  teamData.clave = null;
+  invalidate(VIEW);
+  notify.success('Este cuadrante vuelve a ser tu cuadrante personal.', {
+    action: { label: 'Deshacer', onClick: () => live.undo() },
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Solo lectura por rol: se DESACTIVA, no se esconde
+ *
+ * La seguridad de verdad la impone el servidor (RLS). Esto es para no ofrecer
+ * un botón que va a fallar. Y desactivar sin explicar por qué parece una app
+ * rota, así que el aviso va delante (en la tarjeta del equipo y en el
+ * cuadrante) y los controles quedan con `disabled`.
+ * ------------------------------------------------------------------ */
+
+/** Controles de Ajustes que escriben en el documento compartido. */
+const CONTROLES_ESCRITURA = [
+  'settings-name', 'settings-weekstart', 'settings-demand', 'settings-shift-types',
+  'settings-weekly', 'settings-overtime', 'settings-region',
+  'settings-load-holidays', 'settings-clear-holidays',
+  'settings-import-pdf', 'settings-import-csv',
+  'settings-restore', 'settings-backups', 'settings-clear-schedule',
+];
+
+function aplicarSoloLectura(solo) {
+  for (const id of CONTROLES_ESCRITURA) {
+    desactivar(byId(id), solo);
+  }
+  // El de trasladar los festivos al lunes es un interruptor con nodo propio.
+  desactivar(refs.shiftSunday, solo);
+}
+
+/** Desactiva un control si puede desactivarse; si no, lo marca como tal. */
+function desactivar(node, solo) {
+  if (!node) return;
+  if ('disabled' in node) node.disabled = solo;
+  node.setAttribute?.('aria-disabled', String(!!solo));
+  // Un interruptor es un <div role="switch">: `disabled` no le quita el foco.
+  if (node.getAttribute?.('role') === 'switch') {
+    node.setAttribute('tabindex', solo ? '-1' : '0');
+  }
+}
+
+/** ¿Está el documento en solo lectura ahora mismo? Avisa si lo está. */
+function bloqueadoPorRol() {
+  if (!teams.soloLectura(live.doc)) return false;
+  notify.warning(teams.motivoSoloLectura());
+  return true;
+}
+
+/* ------------------------------------------------------------------ *
  * Pintado
  * ------------------------------------------------------------------ */
 
@@ -1059,6 +1613,11 @@ function render() {
   const settings = doc.settings;
 
   refs.sub.textContent = `${doc.name} · ${doc.members.length} personas · ${doc.entries.length} turnos`;
+
+  /* Equipo y permisos del rol: esto manda sobre lo demás. El rol se decide en
+     `core/teams.js`; aquí solo se aplica (desactivar, no esconder). */
+  paintTeam(ctx);
+  aplicarSoloLectura(teams.soloLectura(doc));
 
   /* Cuadrante */
   if (document.activeElement !== refs.name) refs.name.value = doc.name;

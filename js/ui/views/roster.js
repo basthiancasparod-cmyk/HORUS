@@ -58,6 +58,7 @@ import {
   notify, confirmAction, avatar, fillSelect, emptyState,
 } from '../toolkit.js';
 import * as dialogs from '../dialogs.js';
+import * as teams from '../../core/teams.js';
 
 /** Identificador de la vista; debe coincidir con `context.VIEWS`. */
 export const VIEW = 'roster';
@@ -111,6 +112,8 @@ export function mount(ctx) {
     copyweek: byId('roster-copyweek'),
     holiday: byId('roster-holiday'),
     import: byId('roster-import'),
+    readonly: byId('roster-readonly'),
+    readonlyNote: byId('roster-readonly-note'),
     modeButtons: view ? [...view.querySelectorAll('[data-roster-mode]')] : [],
   };
 
@@ -285,6 +288,12 @@ function wireTableInteractions() {
 
 function onTableClick(event) {
   if (!hasDom()) return;
+  // En solo lectura la casilla no abre nada: se dice por qué (y el aviso de
+  // arriba lo repite) en vez de dejar un clic que no responde.
+  if (soloLectura()) {
+    notify.warning(teams.motivoSoloLectura());
+    return;
+  }
   const target = event.target;
   if (!(target instanceof Element)) return;
 
@@ -323,6 +332,7 @@ function onTableClick(event) {
 }
 
 function onDragStart(event) {
+  if (soloLectura()) return; // con rol de solo lectura no hay nada que arrastrar
   const pill = event.target instanceof Element ? event.target.closest('.shift-pill[data-entry-id]') : null;
   if (!pill) return;
   dragState.entryId = pill.dataset.entryId;
@@ -354,6 +364,7 @@ function onDragLeave(event) {
 }
 
 function onDrop(event) {
+  if (soloLectura()) return;
   const cell = event.target instanceof Element ? event.target.closest('td.shift-cell[data-date][data-member-id]') : null;
   if (!cell) return;
   event.preventDefault();
@@ -417,12 +428,48 @@ export function render() {
   const filters = getFilters();
 
   applyMode();
+  aplicarSoloLectura(teams.soloLectura(doc));
   paintSubtitle(doc, days);
 
   paintHead(days, today, members.length);
   paintBody({ doc, days, today, members, entriesByDate, totals, conflicts, filters });
   paintFoot(doc, days);
   paintLegend(doc, ctx);
+}
+
+/* ==================================================================== *
+ * Solo lectura por rol
+ *
+ * Quien mira el cuadrante de un equipo con rol `viewer` (o con un rol que la
+ * app no reconoce) no puede escribir: el servidor lo rechazaría con RLS. En
+ * vez de ofrecer botones que van a fallar, se DESACTIVAN y se explica por qué
+ * en el aviso de arriba. Nada se esconde: esconder parece una app rota.
+ *
+ * La decisión («qué rol puede escribir») está en `core/teams.js`, en un solo
+ * sitio; aquí solo se aplica.
+ * ==================================================================== */
+
+/** ¿El documento está en solo lectura ahora mismo? */
+function soloLectura() {
+  return teams.soloLectura(getContext().doc);
+}
+
+/** Aplica el estado de solo lectura a la rejilla y a sus botones. */
+function aplicarSoloLectura(solo) {
+  // Botones que ESCRIBEN en el cuadrante. «Copiar» e «Imprimir» no tocan nada,
+  // así que se quedan siempre disponibles.
+  for (const boton of [dom.import, dom.rotate, dom.pattern, dom.copyweek, dom.holiday]) {
+    if (!boton) continue;
+    boton.disabled = solo;
+    boton.setAttribute('aria-disabled', String(!!solo));
+    if (solo) boton.title = teams.motivoSoloLectura();
+  }
+
+  if (dom.readonly) dom.readonly.hidden = !solo;
+  if (dom.readonlyNote && solo) dom.readonlyNote.textContent = teams.motivoSoloLectura();
+
+  // Las casillas se quedan a la vista, pero dejan de invitar a editarlas.
+  if (dom.table) dom.table.classList.toggle('is-readonly', !!solo);
 }
 
 /* ------------------------------------------------------------------ *

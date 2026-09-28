@@ -16,6 +16,7 @@ import {
 } from '../context.js';
 import { avatar, barRow, emptyState, notify, confirmAction } from '../toolkit.js';
 import * as dialogs from '../dialogs.js';
+import * as teams from '../../core/teams.js';
 import {
   analyzeMonth, findConflicts, summarizeMonth, weeklyBreakdown,
 } from '../../core/coverage.js';
@@ -151,6 +152,16 @@ function render() {
   const ctx = getContext();
   const doc = ctx.doc;
 
+  // Con rol de solo lectura en el equipo del documento, todo lo que escribe
+  // queda DESACTIVADO (y explicado): las vistas no deben ofrecer algo que el
+  // servidor va a rechazar. La decisión está en `core/teams.js`.
+  const solo = teams.soloLectura(doc);
+  if (refs.add) {
+    refs.add.disabled = solo;
+    refs.add.setAttribute('aria-disabled', String(!!solo));
+    refs.add.title = solo ? teams.motivoSoloLectura() : '';
+  }
+
   // El mes en foco es el de la fecha compartida (calendario / cuadrante / horas).
   const monthKey = monthKeyOf(getFocusDate(todayKey()));
   const summary = summarizeMonth(doc, monthKey);
@@ -243,7 +254,7 @@ function render() {
   setText(refs.count, plural(members.length, 'persona', 'personas'));
 
   /* ---------- Lista de personas ---------- */
-  renderMemberList(ctx, doc, members, byMember, weeksByMember, conflictsByMember);
+  renderMemberList(ctx, doc, members, byMember, weeksByMember, conflictsByMember, solo);
 
   /* ---------- Carga de trabajo ---------- */
   renderWorkload(ctx, doc, members, byMember);
@@ -252,14 +263,14 @@ function render() {
   renderByType(summary);
 
   /* ---------- Avisos ---------- */
-  renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from, to });
+  renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from, to, solo });
 }
 
 /* ------------------------------------------------------------------ *
  * Lista de personas
  * ------------------------------------------------------------------ */
 
-function renderMemberList(ctx, doc, members, byMember, weeksByMember, conflictsByMember) {
+function renderMemberList(ctx, doc, members, byMember, weeksByMember, conflictsByMember, solo = false) {
   if (!refs.list) return;
   clear(refs.list);
 
@@ -268,7 +279,7 @@ function renderMemberList(ctx, doc, members, byMember, weeksByMember, conflictsB
       iconName: 'users',
       title: 'Todavía no hay nadie en el equipo',
       message: 'Añade a la primera persona para empezar a repartir turnos.',
-      action: { label: 'Añadir persona', onClick: () => dialogs.openMemberEditor(getContext(), null) },
+      action: solo ? null : { label: 'Añadir persona', onClick: () => dialogs.openMemberEditor(getContext(), null) },
     }));
     return;
   }
@@ -278,12 +289,13 @@ function renderMemberList(ctx, doc, members, byMember, weeksByMember, conflictsB
       stats: byMember.get(member.id) || EMPTY_MEMBER_STATS,
       weeks: weeksByMember.get(member.id) || [],
       conflicts: conflictsByMember.get(member.id) || 0,
+      solo,
     }));
   }
 }
 
 /** Tarjeta `.member-card` de una persona. */
-function memberCard(ctx, doc, member, { stats, weeks, conflicts }) {
+function memberCard(ctx, doc, member, { stats, weeks, conflicts, solo = false }) {
   const isMe = doc.meId === member.id;
   const inactive = member.active === false;
   const role = member.role || 'member';
@@ -328,11 +340,17 @@ function memberCard(ctx, doc, member, { stats, weeks, conflicts }) {
 
   const actions = el('div', { class: 'member-actions' });
 
+  // Con rol de solo lectura las acciones se quedan a la vista pero
+  // desactivadas, con el motivo en el `title`.
+  const motivo = solo ? teams.motivoSoloLectura() : null;
+
   actions.appendChild(el('button', {
     type: 'button',
     class: 'icon-btn',
-    title: `Editar a ${member.name || 'esta persona'}`,
+    title: motivo || `Editar a ${member.name || 'esta persona'}`,
     'aria-label': `Editar a ${member.name || 'esta persona'}`,
+    'aria-disabled': String(!!solo),
+    disabled: solo,
     onclick: () => dialogs.openMemberEditor(getContext(), member.id),
   }, icon('edit', 16)));
 
@@ -340,8 +358,10 @@ function memberCard(ctx, doc, member, { stats, weeks, conflicts }) {
     actions.appendChild(el('button', {
       type: 'button',
       class: 'icon-btn',
-      title: 'Soy yo',
+      title: motivo || 'Soy yo',
       'aria-label': `Marcar a ${member.name || 'esta persona'} como mi cuenta`,
+      'aria-disabled': String(!!solo),
+      disabled: solo,
       onclick: () => {
         getContext().actions.setActiveMember(member.id);
         notify.success(`Ahora el cuadrante te destaca como ${member.name || 'esta persona'}`);
@@ -352,8 +372,10 @@ function memberCard(ctx, doc, member, { stats, weeks, conflicts }) {
   actions.appendChild(el('button', {
     type: 'button',
     class: 'icon-btn',
-    title: 'Asignar turno',
+    title: motivo || 'Asignar turno',
     'aria-label': `Asignar un turno a ${member.name || 'esta persona'}`,
+    'aria-disabled': String(!!solo),
+    disabled: solo,
     onclick: () => dialogs.openAssignDialog(getContext(), { memberIds: [member.id] }),
   }, icon('calendar', 16)));
 
@@ -614,11 +636,11 @@ export async function quitarDuplicados(ctx, doc, duplicados) {
   });
 }
 
-function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from, to }) {
+function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from, to, solo = false }) {
   if (!refs.alerts || !refs.alertsSection) return;
   clear(refs.alerts);
 
-  /** @type {{text:string, detail?:string, serious?:boolean, action?:{label:string,onClick:Function}}[]} */
+  /** @type {{text:string, detail?:string, serious?:boolean, writes?:boolean, action?:{label:string,onClick:Function}}[]} */
   const alerts = [];
 
   /* 0-bis) TURNOS DUPLICADOS: dos entradas para la misma persona el mismo dia.
@@ -635,6 +657,7 @@ function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from,
         + 'En el Cuadrante no se nota (enseña uno), pero en el editor del día la persona sale repetida. '
         + 'Se puede dejar un solo turno por día y persona.',
       serious: true,
+      writes: true,
       action: { label: 'Quitar duplicados', onClick: () => quitarDuplicados(ctx, doc, duplicados) },
     });
   }
@@ -652,6 +675,7 @@ function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from,
       text: `Puede haber ${grupo.length} fichas de la misma persona: ${grupo[0].name || 'sin nombre'}`,
       detail: `${nombres}. Unirlas deja una sola ficha con todos sus turnos.`,
       serious: true,
+      writes: true,
       action: { label: 'Unir fichas', onClick: () => unirFichas(ctx, doc, grupo) },
     });
   }
@@ -712,6 +736,7 @@ function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from,
 
   refs.alertsSection.hidden = alerts.length === 0;
   for (const alert of alerts) {
+    const bloqueado = solo && alert.writes;
     refs.alerts.appendChild(el('div', {
       class: `gap-item ${alert.serious ? 'is-empty' : ''}`.trim(),
     }, [
@@ -719,9 +744,17 @@ function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from,
       el('div', { class: 'grow' }, [
         el('div', {}, alert.text),
         alert.detail ? el('div', { class: 't-2xs t-muted' }, alert.detail) : null,
+        bloqueado ? el('div', { class: 't-2xs t-muted' }, teams.motivoSoloLectura()) : null,
       ]),
       alert.action
-        ? el('button', { type: 'button', class: 'btn btn-sm btn-ghost', onclick: alert.action.onClick }, alert.action.label)
+        ? el('button', {
+          type: 'button',
+          class: 'btn btn-sm btn-ghost',
+          disabled: bloqueado,
+          'aria-disabled': String(!!bloqueado),
+          title: bloqueado ? teams.motivoSoloLectura() : '',
+          onclick: alert.action.onClick,
+        }, alert.action.label)
         : null,
     ]));
   }

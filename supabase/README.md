@@ -58,9 +58,9 @@ la 0001 aplicada, ese espejo no hace absolutamente nada.
 ## 2. La app funciona sin Supabase
 
 - **Con Supabase**: sincronización en la nube entre dispositivos y cambios en
-  vivo (Realtime) en un segundo dispositivo. Los equipos y las invitaciones ya
-  están en el servidor (apartado 6), pero el cliente todavía no los usa: eso
-  llega en la fase 2.
+  vivo (Realtime) en un segundo dispositivo. Los equipos se gestionan ya desde
+  la propia app (**Ajustes → Equipo**): crear un equipo, entrar con un código,
+  ver los miembros y sus roles, y salir.
 - **Sin Supabase** (o sin sesión iniciada): todo sigue funcionando, pero los
   datos viven solo en ese navegador. Se pierde al borrar los datos del sitio.
   No hay equipos, ni invitaciones, ni sincronización entre dispositivos.
@@ -123,10 +123,11 @@ Desde la migración **0002**, cada fila de las ocho tablas pertenece a un
 Reglas, en corto:
 
 - `user_id` **se conserva** en todas las filas: es «quién escribió la fila».
-  La app actual sigue subiendo y bajando por `user_id` sin cambiar ni una
-  línea, y un trigger rellena `owner_key` cuando la fila llega sin ella
-  (`'user:' || user_id`, `'team:' || id` en los equipos, `'team:' || team_id`
-  en las pertenencias).
+  El cliente ya no filtra por él: sube y baja POR ÁMBITO (`owner_key`), y manda
+  `user_id` además porque el trigger del servidor lo espera y la app antigua lo
+  usa. El trigger rellena `owner_key` si la fila llega sin ella (`'user:' ||
+  user_id`, `'team:' || id` en los equipos, `'team:' || team_id` en las
+  pertenencias).
 - El ámbito de una fila (`owner_key`) **no se cambia con un `UPDATE`**: un
   trigger lo impide (`HORUS: el ámbito de una fila (owner_key) no se puede
   cambiar…`). Mover filas de un ámbito a otro tiene que ser una función RPC
@@ -140,6 +141,9 @@ Reglas, en corto:
   leer ese equipo.
 
 ### Entrar en un equipo con un código
+
+Desde la app: **Ajustes → Equipo → «Entrar con un código»**. Por dentro llama a
+esta función:
 
 ```sql
 select public.horus_join_team('MI-CODIGO');   -- devuelve el uuid del equipo
@@ -157,12 +161,16 @@ select public.horus_join_team('MI-CODIGO');   -- devuelve el uuid del equipo
   invitación no es válido*), tanto si el equipo no existe como si está
   borrado: así el error no sirve para adivinar códigos ni equipos.
 
-### Crear un equipo (todavía por SQL)
+### Crear un equipo
 
-El cliente aún **no** escribe en `horus_teams` ni en `horus_team_members` (eso
-es la fase 2), así que hoy un equipo se crea desde el SQL Editor. Ojo: en el
-SQL Editor `auth.uid()` es `null`, así que hay que poner el uuid a mano
-(*Authentication → Users*, o `select id, email from auth.users`):
+Lo normal es hacerlo desde la app: **Ajustes → Equipo → «Crear un equipo»**. El
+cliente inserta la fila de `horus_teams` (con su `name`, su `invite_code`
+generado en el dispositivo y `owner_id = auth.uid()`) y la pertenencia como
+`owner`; el `id` y el `owner_key` los pone el servidor.
+
+También se puede crear a mano desde el SQL Editor. Ojo: ahí `auth.uid()` es
+`null`, así que hay que poner el uuid a mano (*Authentication → Users*, o
+`select id, email from auth.users`):
 
 ```sql
 -- con tu uuid de usuario:
@@ -175,7 +183,10 @@ insert into public.horus_team_members (team_id, user_id, role)
 values ('<uuid-del-equipo>', '<tu-uuid>', 'owner');
 ```
 
-`owner_key` no hace falta escribirla nunca: la rellena el trigger.
+`owner_key` no hace falta escribirla nunca: la rellena el trigger. Un equipo
+creado así no tiene fila en `horus_team_members` para su dueño, pero la app lo
+reconoce igual: «mis equipos» incluye los que tienen `owner_id = auth.uid()` y
+su rol sale como `owner`.
 
 ### Comprobar qué políticas han quedado
 
@@ -209,12 +220,17 @@ vieja (más permisiva): vuelve a ejecutar la 0002. Las `horus_legacy_*` de
   peticiones (cambios de turno, vacaciones, marcas propias) todavía no existe.
   Cuando exista hay que afinarlo: el `member` solo debería escribir SUS
   peticiones y SUS marcas. Está marcado como `TODO(fase-2)` en
-  `horus_can_write()`.
-- El cliente todavía filtra por `user_id` y no conoce los equipos: no hay
-  interfaz para crear un equipo, invitar ni entrar con un código.
+  `horus_can_write()`, y la interfaz refleja hoy esa misma regla: con `member`
+  se edita el cuadrante (lo dice `puedeEditarCuadrante()` en
+  `js/core/teams.js`).
 - Los `admin` pueden editar todo el cuadrante, pero **no** el equipo en sí
   (nombre, código de invitación, altas y cambios de rol): eso sigue siendo del
-  `owner`, como en la 0001.
+  `owner`, como en la 0001. La interfaz solo ofrece cambiar roles y rotar el
+  código al dueño.
 - Se han retirado los índices de pull por `user_id` de las seis tablas
-  personales (los sustituye el de `owner_key`). Hasta que el cliente cambie,
-  sus consultas siguen funcionando exactamente igual, pero sin índice propio.
+  personales (los sustituye el de `owner_key`): el cliente ya sincroniza por
+  ámbito, así que sus consultas usan el índice nuevo.
+- La lista de miembros solo da `user_id`: **no hay forma de leer los correos de
+  los demás desde el cliente** (no hay vista ni función que los exponga). La
+  app lo dice tal cual e identifica a cada miembro por un trozo de su cuenta.
+  Si algún día se quieren nombres, hace falta una función o una vista nueva.
