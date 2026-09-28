@@ -741,6 +741,16 @@
         <!-- Nube -->
         <div class="settings-group">
           <h3 class="section-label">Cuenta y nube</h3>
+          <!-- Ayuda que se ve aunque la tarjeta esté plegada: el error «No API key
+               found in request» casi siempre empieza por pegar la clave que no es,
+               así que se dice cuál hay que copiar antes de pedirla. -->
+          <p class="field-hint">
+            Si usas tu propio proyecto de Supabase, aquí se pega la clave
+            <strong>pública</strong>: la nueva «publishable» (empieza por <strong>sb_publishable_</strong>)
+            o la clásica «anon» (empieza por <strong>eyJ</strong>). La clave
+            <strong>secret</strong> («sb_secret_…») <strong>no se pone nunca</strong> en la aplicación:
+            se salta todas las reglas de seguridad y solo vale en un servidor.
+          </p>
           <div class="card" id="settings-account"></div>
           <div class="card" id="settings-cloud"></div>
           <!-- Comprobación real de la configuración: sin red no hay nada que

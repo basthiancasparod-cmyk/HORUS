@@ -2498,6 +2498,94 @@ await itAsync('«Probar la conexión» confirma cuando todo funciona', async () 
   ok(texto.includes('HTTP 200'), 'con la respuesta literal del servidor');
 });
 
+/* -------------------------------------------------------------------- *
+ * La clave pública: las DOS formas que emite Supabase, de punta a punta
+ *
+ * El fallo que llegó desde la aplicación real: con una clave pública de las
+ * nuevas (`sb_publishable_…`) pegada en Ajustes → Nube, la app se quedaba sin
+ * clave (se descartaba al guardarla, porque no es un JWT) y salía a la red sin
+ * la cabecera `apikey`. Aquí se comprueba lo contrario, y por el mismo camino
+ * que la app de verdad: se guarda la clave, la capa de equipos hace peticiones
+ * contra el Supabase falso y la clave viaja en la cabecera. Y la que NO puede
+ * usarse en el navegador (`sb_secret_…`) se rechaza desde el propio formulario.
+ * -------------------------------------------------------------------- */
+
+const CLAVE_PUBLICABLE = 'sb_publishable_9hZk2LmQ4rT7wX1yB3nC5vD8fG0jH6kP';
+const CLAVE_ANON_CLASICA = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${'x'.repeat(40)}.${'z'.repeat(20)}`;
+const CLAVE_SECRETA = 'sb_secret_9hZk2LmQ4rT7wX1yB3nC5vD8fG0jH6kP';
+const URL_NUBE = 'https://proyecto-de-prueba.supabase.co';
+
+/** La clave que llevó cada petición que ha salido (el Supabase falso las apunta). */
+function clavesEnviadas() {
+  return nube.llamadas.map((peticion) => peticion.cabeceras.apikey);
+}
+
+await itAsync('una clave pública nueva («sb_publishable_…») viaja en la cabecera apikey', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  await conConfiguracion({ propia: { url: URL_NUBE, anonKey: CLAVE_PUBLICABLE } }, async () => {
+    is(configMod.cloudConfig().anonKey, CLAVE_PUBLICABLE,
+      'la clave nueva se guarda entera (antes se descartaba por no ser un JWT)');
+
+    const crear = await teamsMod.createTeam('Equipo con clave nueva');
+    is(crear.ok, true, `crear el equipo funciona (${crear.error || 'sin error'})`);
+
+    ok(nube.llamadas.length > 0, 'ha salido una petición de verdad');
+    is(clavesEnviadas().filter((clave) => !clave).length, 0, 'ninguna salió sin la cabecera apikey');
+    is(clavesEnviadas()[0], CLAVE_PUBLICABLE, 'y lleva la clave nueva, tal cual se guardó');
+  });
+});
+
+await itAsync('la clave clásica («anon»: un JWT) sigue viajando en la cabecera apikey', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  await conConfiguracion({ propia: { url: URL_NUBE, anonKey: CLAVE_ANON_CLASICA } }, async () => {
+    is(configMod.cloudConfig().anonKey, CLAVE_ANON_CLASICA, 'la clásica no se ha roto');
+
+    const crear = await teamsMod.createTeam('Equipo con clave clásica');
+    is(crear.ok, true, `crear el equipo funciona (${crear.error || 'sin error'})`);
+    is(clavesEnviadas()[0], CLAVE_ANON_CLASICA, 'y la clave clásica llega igual a la cabecera');
+  });
+});
+
+await itAsync('Ajustes rechaza la clave secreta («sb_secret_…») y no guarda nada', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  configMod.setCloudConfig(null);
+  configMod.resetCloudConfigCache();
+
+  const store = storeMod.createStore(oneDayDoc());
+  await montarEnAjustes(store, 20);
+
+  const caja = env.document.getElementById('settings-cloud');
+  const campoClave = env.document.getElementById('cloud-key');
+  ok(campoClave, 'el campo de la clave está en el formulario');
+  env.document.getElementById('cloud-url').value = URL_NUBE;
+  campoClave.value = CLAVE_SECRETA;
+
+  const guardar = [...caja.querySelectorAll('button')]
+    .find((boton) => /Guardar y recargar/.test(boton.textContent));
+  ok(guardar, 'el botón de guardar existe');
+  // Montar Ajustes ya hace sus propias consultas (el rol en el equipo), así que
+  // lo que se mide es lo que pasa A PARTIR del intento de guardar.
+  const antes = nube.llamadas.length;
+  guardar.click();
+  await sleep(20);
+
+  const aviso = env.document.getElementById('toasts').textContent;
+  ok(/secret/i.test(aviso), `el aviso dice qué clave es (${aviso.slice(0, 160)})`);
+  ok(/no puede usarse en el navegador/i.test(aviso), 'y que no puede estar en el navegador');
+  ok(/servidor/i.test(aviso), 'y dónde sí vale');
+  is(configMod.hasOwnCloudConfig(), false, 'no ha quedado guardada');
+  is(nube.llamadas.length, antes, 'el intento de guardarla no ha disparado ninguna petición');
+  ok(!clavesEnviadas().includes(CLAVE_SECRETA), 'y la clave secreta no ha salido en ninguna cabecera');
+});
+
 /* ==================================================================== *
  * Informe
  * ==================================================================== */

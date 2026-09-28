@@ -86,16 +86,17 @@ const AJUSTES_NUBE = 'Ajustes → Nube';
 const SIN_CONFIGURACION = {
   url_y_clave: `Faltan la URL y la clave pública del proyecto de Supabase. Configúralas en ${AJUSTES_NUBE}.`,
   url: `Falta la URL del proyecto de Supabase. Configúrala en ${AJUSTES_NUBE}.`,
-  clave: `Falta la clave pública (anon) del proyecto de Supabase. Configúrala en ${AJUSTES_NUBE}.`,
+  clave: `Falta la clave pública (la «publishable» o la clásica «anon») del proyecto de Supabase. Configúrala en ${AJUSTES_NUBE}.`,
 };
 
 /**
  * Qué falta para poder hablar con Supabase: `null` si no falta nada, o
  * `'url_y_clave'`, `'url'` o `'clave'`.
  *
- * OJO con las claves de formato nuevo de Supabase (`sb_publishable_…`): no son
- * JWT, así que `config.js` las descarta al guardarlas y aquí cuentan como clave
- * que falta. El diagnóstico de Ajustes → Nube lo enseña para que se vea.
+ * OJO: aquí se llega cuando `config.js` ha descartado lo guardado, así que una
+ * clave que no llega a `baseHeaders()` es, para la app, una clave que falta. Eso
+ * incluye a propósito la clave `sb_secret_…`: se rechaza al guardarla (ver
+ * `clasificarClave()` en `config.js`) para que no acabe en el navegador.
  */
 export function faltaConfiguracion() {
   const { url, anonKey } = cfg();
@@ -124,16 +125,26 @@ function proyectoDeUrl(url) {
  * Descripción de la clave pública SIN enseñarla nunca entera: los ocho
  * primeros caracteres bastan para reconocer cuál se pegó y para notar de un
  * vistazo una clave truncada o pegada a medias.
+ *
+ * `forma` distingue las DOS que emite Supabase hoy: `jwt` (la clásica «anon»,
+ * la única que se puede reconocer por su prefijo `eyJ`) y `publica` (la nueva
+ * `sb_publishable_…`). Importa para el diagnóstico: decir de una clave nueva
+ * que «no es una clave de Supabase» mandaría al usuario a buscar un problema
+ * que no existe. `pareceJwt` se mantiene por compatibilidad con lo que ya lo
+ * usaba.
  */
 export function describirClave(clave) {
   const texto = String(clave || '');
-  if (!texto) return { hay: false, mascara: '', pareceJwt: false, longitud: 0 };
+  if (!texto) return { hay: false, mascara: '', forma: 'ninguna', pareceJwt: false, longitud: 0 };
+  const forma = texto.startsWith('sb_publishable_')
+    ? 'publica'
+    : (texto.startsWith('sb_secret_') ? 'secreta'
+      : (texto.startsWith('eyJ') || texto.split('.').length === 3 ? 'jwt' : 'desconocida'));
   return {
     hay: true,
     mascara: `${texto.slice(0, 8)}…`,
-    // Las claves de Supabase (la «anon») son JWT: su primera parte va en base64
-    // y empieza siempre por «eyJ».
-    pareceJwt: texto.startsWith('eyJ'),
+    forma,
+    pareceJwt: forma === 'jwt',
     longitud: texto.length,
   };
 }
@@ -183,7 +194,14 @@ export function isSignedIn() {
   return !!session?.accessToken;
 }
 
-/** Cabeceras base para cualquier llamada. */
+/**
+ * Cabeceras base para cualquier llamada.
+ *
+ * La clave llega ya limpia y validada por `config.js` (`sanitizeKey()`): aquí
+ * NO se recorta ni se normaliza, para que lo que viaja en `apikey` sea
+ * exactamente lo que el usuario guardó. Si estuviera vacía, `request()` no
+ * llega hasta aquí: falla antes, en español.
+ */
 function baseHeaders(extra = {}) {
   const { anonKey } = cfg();
   return {

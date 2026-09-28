@@ -25,7 +25,15 @@
 // literal del servidor. Cambian `index.html`, `auth.js`, `teams.js` y
 // `settings.js`, los cuatro en el precache: sin subir la versión, el navegador
 // seguiría sirviendo los archivos viejos y el arreglo no llegaría.
-const VERSION = 'v4.21.0';
+//
+// v4.22.0: `config.js` acepta por fin las claves públicas nuevas de Supabase
+// (`sb_publishable_…`), que no son JWT, y rechaza con un mensaje claro la clave
+// `sb_secret_…`. El fallo que arregla lo sufría el usuario sin verlo: la clave
+// se descartaba al guardarla, la app se quedaba sin ninguna y Supabase
+// contestaba «No API key found in request». `config.js` está en el precache, así
+// que sin subir esto el navegador seguiría sirviendo el archivo viejo y el
+// arreglo no llegaría a quien lo necesita.
+const VERSION = 'v4.22.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 

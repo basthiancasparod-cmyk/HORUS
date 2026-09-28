@@ -137,6 +137,13 @@ Crea una cuenta desde la propia pantalla de acceso. A partir de ahí, el cuadran
 se sincroniza entre tus dispositivos. Detalles en
 [`supabase/README.md`](supabase/README.md), incluido el SQL que hay que aplicar.
 
+Con tu propio proyecto, las credenciales se pegan en **Ajustes → Nube**: la URL
+y la **clave pública**, que es la `publishable` del panel nuevo (empieza por
+`sb_publishable_`) o la clásica `anon` (empieza por `eyJ`). Las dos valen. La
+clave `secret` (`sb_secret_…`, antes `service_role`) **no se pone nunca** en la
+aplicación: se salta todas las reglas de seguridad y HORUS la rechaza al
+guardarla, diciendo por qué.
+
 ### Cuadrante de equipo (opcional)
 
 Con cuenta, el cuadrante puede ser **de un equipo** en vez de personal. Todo se
@@ -230,19 +237,20 @@ docs/
 ## Pruebas
 
 ```bash
-npm run verify     # comprobación estática + orden del SQL + las 6 suites
+npm run verify     # comprobación estática + orden del SQL + las 7 suites
 npm test           # solo las suites
 npm run check:sql  # solo el orden de las definiciones de la migración
 ```
 
 | Suite | Qué comprueba | Pruebas |
 |---|---|---|
-| `tests/run.js` | Núcleo: fechas, modelo, cobertura, store, persistencia, utilidades | 111 |
+| `tests/run.js` | Núcleo: fechas, modelo, cobertura, store, persistencia, utilidades y las claves públicas que acepta `config.js` | 119 |
 | `tests/io.js` | Exportación/importación, sincronización (con un Supabase falso) y avisos | 77 |
 | `tests/scenario.js` | Un equipo real: 5 personas, rotaciones, noche, festivos y rendimiento | 81 |
-| `tests/smoke.mjs` | Las 6 vistas montadas sobre el `index.html` real, con clics y diálogos, y la gestión de equipos por rol | 86 |
+| `tests/smoke.mjs` | Las 6 vistas montadas sobre el `index.html` real, con clics y diálogos, la gestión de equipos por rol y la clave pública de punta a punta | 102 |
 | `tests/app.mjs` | Arranque real: asistente, uso, recarga, migración, exportación y solo lectura por rol | 23 |
-| `tests/import.mjs` | Importación del cuadrante desde un PDF real: lectura, rejilla, verdad de referencia y volcado | 30 |
+| `tests/import.mjs` | Importación del cuadrante desde un PDF real: lectura, rejilla, verdad de referencia y volcado | 39 |
+| `tests/ai.mjs` | Importación con IA: proveedores, prompts, reintentos y verificación de lo leído | 35 |
 | `tools/check.mjs` | Enlazado de módulos, ids del HTML, clases CSS, precache, manifiesto | — |
 | `tools/sql-order.mjs` | Orden de las definiciones de la migración de Supabase (evita el `42P01`) | — |
 

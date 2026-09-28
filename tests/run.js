@@ -79,6 +79,7 @@ const coverage = await import('../js/core/coverage.js');
 const storage = await import('../js/core/storage.js');
 const storeMod = await import('../js/core/store.js');
 const utils = await import('../js/core/utils.js');
+const config = await import('../js/config.js');
 
 /* ================================================================== *
  * date.js
@@ -1302,6 +1303,142 @@ test('debounce agrupa llamadas', async () => {
   is(calls, 0, 'todavía no se ha llamado');
   await utils.sleep(30);
   is(calls, 1);
+});
+
+/* ================================================================== *
+ * config.js — qué claves públicas se aceptan
+ *
+ * El fallo que motivó estas pruebas: `sanitizeKey` exigía la forma del JWT
+ * clásico (tres partes separadas por puntos), así que DESCARTABA EN SILENCIO las
+ * claves públicas nuevas de Supabase (`sb_publishable_…`), que no llevan puntos.
+ * La app se quedaba sin clave y todas las peticiones salían sin la cabecera
+ * `apikey`, que Supabase corta con «No API key found in request».
+ * ================================================================== */
+
+suite('config.js — la clave pública de Supabase');
+
+const URL_PROYECTO = 'https://proyecto-de-prueba.supabase.co';
+
+/** Forma REAL de las claves nuevas: prefijo `sb_publishable_` y token largo. */
+const CLAVE_PUBLICABLE = 'sb_publishable_9hZk2LmQ4rT7wX1yB3nC5vD8fG0jH6kP';
+/** La clásica: un JWT de tres partes, como el «anon» que emite Supabase. */
+const CLAVE_ANON = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${'x'.repeat(40)}.${'y'.repeat(20)}`;
+/** La que NO puede estar aquí: se salta RLS entera. */
+const CLAVE_SECRETA = 'sb_secret_9hZk2LmQ4rT7wX1yB3nC5vD8fG0jH6kP';
+
+/** Guarda una clave y devuelve el resultado, partiendo siempre de cero. */
+function guardarClave(clave) {
+  config.setCloudConfig(null);
+  config.resetCloudConfigCache();
+  const resultado = config.setCloudConfig({ url: URL_PROYECTO, anonKey: clave });
+  config.resetCloudConfigCache();
+  return resultado;
+}
+
+test('acepta la clave nueva («sb_publishable_…»), que no es un JWT', () => {
+  const resultado = guardarClave(CLAVE_PUBLICABLE);
+  is(resultado.ok, true, `la clave nueva se acepta al guardarla (${resultado.error || ''})`);
+  is(resultado.error, undefined, 'y no devuelve ningún error');
+  // Se comprueba leyéndola de nuevo (no solo lo que devuelve el guardado): es el
+  // camino que hace `baseHeaders()` antes de cada petición.
+  is(config.cloudConfig().anonKey, CLAVE_PUBLICABLE, 'se guarda entera, carácter a carácter');
+  is(config.cloudConfig().source, 'override', 'y manda sobre la de por defecto');
+  is(config.hasOwnCloudConfig(), true, 'cuenta como configuración propia');
+});
+
+test('la clave clásica (JWT «anon») sigue aceptándose igual', () => {
+  const resultado = guardarClave(CLAVE_ANON);
+  is(resultado.ok, true, 'la clásica no se ha roto');
+  is(config.cloudConfig().anonKey, CLAVE_ANON, 'y se guarda entera');
+
+  // La del propio repositorio, que es la que usa el despliegue por defecto.
+  config.setCloudConfig(null);
+  config.resetCloudConfigCache();
+  const porDefecto = config.cloudConfig();
+  is(porDefecto.source, 'default', 'sin configuración propia se usa la de por defecto');
+  is(porDefecto.anonKey, config.DEFAULT_CLOUD.anonKey, 'con la clave del repositorio intacta');
+  is(porDefecto.configured, true, 'y la nube queda configurada');
+});
+
+test('la clave nueva vale también como configuración por defecto del despliegue', () => {
+  // Un despliegue puede traer la clave escrita en `config.js` (sin pasar por
+  // Ajustes): esa ruta no puede seguir siendo solo-JWT.
+  config.setCloudConfig(null);
+  config.setDefaultCloud({ url: URL_PROYECTO, anonKey: CLAVE_PUBLICABLE });
+  config.resetCloudConfigCache();
+  try {
+    const porDefecto = config.cloudConfig();
+    is(porDefecto.source, 'default', 'se usa la configuración por defecto');
+    is(porDefecto.anonKey, CLAVE_PUBLICABLE, 'y la clave nueva llega entera');
+    is(porDefecto.configured, true, 'el despliegue queda configurado');
+  } finally {
+    config.setDefaultCloud(config.DEFAULT_CLOUD);
+    config.resetCloudConfigCache();
+  }
+});
+
+test('limpia espacios, saltos de línea y comillas al pegar la clave', () => {
+  config.setCloudConfig(null);
+  config.resetCloudConfigCache();
+  const resultado = config.setCloudConfig({
+    url: `  ${URL_PROYECTO}/  `,
+    anonKey: `  "${CLAVE_PUBLICABLE}"\n`,
+  });
+  is(resultado.ok, true, 'el pegote típico del portapapeles se acepta');
+  const guardada = config.cloudConfig();
+  is(guardada.anonKey, CLAVE_PUBLICABLE, 'la clave queda sin comillas, sin espacios y sin salto de línea');
+  is(guardada.url, URL_PROYECTO, 'y la URL sin espacios ni barra final');
+});
+
+test('rechaza la clave secreta («sb_secret_…») y explica por qué no va aquí', () => {
+  const resultado = guardarClave(CLAVE_SECRETA);
+  is(resultado.ok, false, 'la clave secreta NO se guarda');
+  ok(/secret/i.test(resultado.error), `el mensaje nombra la clave (${resultado.error})`);
+  ok(/no puede usarse en el navegador/i.test(resultado.error), 'y dice que no puede estar en el navegador');
+  ok(/RLS/.test(resultado.error), 'y qué se salta (las reglas de seguridad)');
+  ok(/servidor/i.test(resultado.error), 'y dónde sí vale');
+  is(config.hasOwnCloudConfig(), false, 'no ha quedado nada guardado');
+  is(config.cloudConfig().anonKey, config.DEFAULT_CLOUD.anonKey, 'se sigue usando la clave por defecto');
+});
+
+test('rechaza también el JWT de servicio (la antigua «service_role»)', () => {
+  const jwtConRol = (rol) => {
+    const payload = Buffer.from(JSON.stringify({ iss: 'supabase', role: rol })).toString('base64');
+    return `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.${payload}.${'z'.repeat(20)}`;
+  };
+
+  const servicio = guardarClave(jwtConRol('service_role'));
+  is(servicio.ok, false, 'la clave de servicio se rechaza igual que la nueva «secret»');
+  ok(/servicio/i.test(servicio.error), `el mensaje lo dice con esas palabras (${servicio.error})`);
+  ok(/no puede usarse en el navegador/i.test(servicio.error), 'y que no puede estar en el navegador');
+
+  // El mismo JWT con rol «anon» es la clave de siempre: no se puede rechazar por
+  // mirar el contenido de más.
+  const anon = guardarClave(jwtConRol('anon'));
+  is(anon.ok, true, 'un JWT con rol «anon» se sigue aceptando');
+});
+
+test('una clave vacía o basura se rechaza con un mensaje que dice QUÉ se espera', () => {
+  for (const basura of ['', '   ', 'basura', 'sb_publishable', 'abc.def', 'no-es-una-clave-pero-es-larga-aaaaaaaaaaaaaaaaaaaaaaaaa']) {
+    const resultado = guardarClave(basura);
+    is(resultado.ok, false, `«${basura}» no vale como clave`);
+    ok(resultado.error.includes('sb_publishable_'), `el mensaje nombra la forma nueva (${resultado.error})`);
+    ok(/«anon»|eyJ/.test(resultado.error), 'y también la clásica');
+    ok(/clave pública/i.test(resultado.error), 'y deja claro qué hay que pegar');
+  }
+  is(config.hasOwnCloudConfig(), false, 'y no ha quedado ninguna de esas claves guardada');
+});
+
+test('una clave secreta metida a mano en el almacén tampoco se usa', () => {
+  config.setCloudConfig(null);
+  config.resetCloudConfigCache();
+  localStorage.setItem('horus.cloud', JSON.stringify({ url: URL_PROYECTO, anonKey: CLAVE_SECRETA }));
+  config.resetCloudConfigCache();
+  is(config.hasOwnCloudConfig(), false, 'no cuenta como configuración propia');
+  is(config.cloudConfig().source, 'default', 'se vuelve a la configuración por defecto');
+  is(config.cloudConfig().anonKey, config.DEFAULT_CLOUD.anonKey, 'y la clave secreta no llega a ninguna cabecera');
+  localStorage.removeItem('horus.cloud');
+  config.resetCloudConfigCache();
 });
 
 /* ================================================================== *

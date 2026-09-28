@@ -443,7 +443,7 @@ export async function probarConexion() {
     // Si lo que falta es la clave, se dice de dónde se copia entera: una clave
     // pegada a medias es el motivo más común de este diagnóstico.
     const pista = estado.falta === 'clave' || estado.falta === 'url_y_clave'
-      ? ' La clave «anon» se copia entera (empieza por «eyJ») desde Supabase → Project Settings → API.'
+      ? ' La clave PÚBLICA se copia entera desde Supabase → Project Settings → API Keys: vale tanto la forma nueva («publishable», empieza por «sb_publishable_») como la clásica («anon», empieza por «eyJ»). Nunca la «secret»: esa se salta todas las reglas y solo sirve en el servidor.'
       : '';
     return {
       ...comun,

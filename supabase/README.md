@@ -68,20 +68,31 @@ la 0001 aplicada, ese espejo no hace absolutamente nada.
 Nada de esto bloquea la app: si la red falla, HORUS sigue guardando en local y
 reintenta después.
 
-## 3. Dónde están la URL y la anon key
+## 3. Dónde están la URL y la clave pública
 
 Dashboard del proyecto → **Project Settings** (engranaje) → **API**:
 
 - **Project URL** → `https://<ref>.supabase.co`
-- **Project API keys** → `anon` `public`
+- **Project API keys** → la **pública**, que según la antigüedad del panel se
+  llama de una de estas dos maneras:
+  - panel nuevo: **`publishable`** → empieza por `sb_publishable_`;
+  - proyectos antiguos: **`anon` `public`** → es un JWT y empieza por `eyJ`.
 
-Se pegan en la configuración del cliente de HORUS (login/sync).
+Las dos valen y HORUS acepta cualquiera de las dos. Se pegan **enteras y sin
+comillas** en la configuración del cliente (**Ajustes → Nube**).
 
-## 4. La anon key es pública (a propósito)
+> **La clave `secret` no se pega nunca en la aplicación.** En el panel nuevo se
+> llama `sb_secret_…` y en los proyectos antiguos `service_role`: es la misma
+> cosa. HORUS la **rechaza y lo explica**, porque se salta RLS por completo y
+> cualquiera que abriera la página tendría acceso total a la base de datos. Esa
+> clave es solo para el servidor.
 
-La `anon` key viaja en el navegador: cualquiera puede leerla. **No es un
-secreto** y no hay que "protegerla". Lo que protege los datos es **RLS**
-(Row Level Security), que activan las dos migraciones:
+## 4. La clave pública es pública (a propósito)
+
+Tanto la `anon` clásica como la nueva `publishable` viajan en el navegador:
+cualquiera puede leerlas. **No son un secreto** y no hay que "protegerlas". Lo
+que protege los datos es **RLS** (Row Level Security), que activan las dos
+migraciones:
 
 - cada fila pertenece a un **ámbito** (`owner_key`): en `user:<uuid>` solo
   manda su dueño (leer y escribir); en `team:<uuid>` leen los miembros del
@@ -90,8 +101,9 @@ secreto** y no hay que "protegerla". Lo que protege los datos es **RLS**
 - `user_id` se conserva en todas las filas: es «quién escribió la fila»;
 - los roles viven en `horus_team_members` y `viewer` nunca escribe.
 
-La clave que **nunca** debe salir del servidor es `service_role`: se salta RLS
-por completo. No la pongas en el repo, ni en el cliente, ni en una captura.
+La clave que **nunca** debe salir del servidor es la `secret` (`sb_secret_…`, en
+los proyectos antiguos `service_role`): se salta RLS por completo. No la pongas
+en el repo, ni en el cliente (HORUS la rechaza), ni en una captura.
 
 ## 5. Problemas típicos
 
@@ -103,7 +115,8 @@ por completo. No la pongas en el repo, ni en el cliente, ni en una captura.
 | `relation "public.horus_team_members" does not exist` en la línea 88 | copia antigua de la migración (los helpers iban antes que las tablas) | copia otra vez el archivo entero; la transacción abortada no dejó nada a medias |
 | `42P17 infinite recursion detected in policy` | una política lee la misma tabla que protege | usa los helpers `security definer` (`horus_is_team_member`) como hace la migración |
 | El segundo dispositivo no se actualiza solo | falta la tabla en la publicación Realtime | vuelve a ejecutar la migración (añade las tablas a `supabase_realtime`) |
-| Los datos no suben pero no hay error | sin sesión iniciada o sin URL/anon key configuradas | inicia sesión; revisa la configuración del cliente |
+| Los datos no suben pero no hay error | sin sesión iniciada o sin URL/clave pública configuradas | inicia sesión; revisa la configuración del cliente |
+| `No API key found in request` | no hay clave guardada: la app no la aceptó al pegarla (formato equivocado) o se pegó la `secret` | pega en **Ajustes → Nube** la clave **pública** (`sb_publishable_…` o la `anon` que empieza por `eyJ`); el mensaje de la app dice qué forma se espera |
 | `42P10` / «there is no unique or exclusion constraint matching the ON CONFLICT specification» | PostgREST todavía tiene en caché la clave primaria vieja `(user_id, id)` | ejecuta `notify pgrst, 'reload schema';` (la 0002 ya lo hace al terminar) y reintenta |
 | `HORUS: el ámbito de una fila (owner_key) no se puede cambiar` | se intentó mover una fila de un ámbito a otro con un `UPDATE` suelto | no se hace así a propósito: hace falta una función RPC que lo haga de forma explícita (fase 2) |
 | `HORUS: el código de invitación no es válido` | el código no existe, está mal copiado o el equipo está borrado (`deleted = true`) | copia otra vez el código (`select invite_code from public.horus_teams`); el mensaje es el mismo a propósito, para no poder adivinar códigos |

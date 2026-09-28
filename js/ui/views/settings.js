@@ -1894,7 +1894,11 @@ function paintCloud(ctx = live) {
   details.appendChild(el('summary', { class: 't-sm t-dim', style: { cursor: 'pointer' } },
     own ? 'Cambiar o quitar tu proyecto' : 'Usar tu propio proyecto de Supabase'));
   details.appendChild(el('p', { class: 'field-hint', style: { margin: 'var(--sp-2) 0' } },
-    'La clave «anon» es pública por diseño: viaja en el navegador, y lo que protege los datos son las políticas de la base de datos. Necesitas haber aplicado antes el archivo SQL de la carpeta «supabase» del proyecto.'));
+    'La clave pública es pública por diseño: viaja en el navegador, y lo que protege los datos son las políticas de la base de datos. '
+    + 'Se copia en Supabase → Project Settings → API, y vale cualquiera de las dos formas que emite el panel: la nueva '
+    + '«publishable» (empieza por «sb_publishable_») o la clásica «anon» (empieza por «eyJ»). '
+    + 'La clave «secret» (empieza por «sb_secret_» o lleva «service_role») NO se pega aquí nunca: se salta todas las reglas '
+    + 'de seguridad (RLS) y solo puede usarse en un servidor. Necesitas haber aplicado antes el archivo SQL de la carpeta «supabase» del proyecto.'));
 
   details.appendChild(el('div', { class: 'field' }, [
     el('label', { class: 'field-label', for: 'cloud-url' }, 'URL del proyecto'),
@@ -1910,13 +1914,13 @@ function paintCloud(ctx = live) {
   // escrita pero SIN guardar sin volver a buscarla por su id.
   const campoClave = el('input', {
     class: 'input', type: 'password', id: 'cloud-key',
-    placeholder: 'eyJhbGciOi…', autocomplete: 'off',
+    placeholder: 'sb_publishable_… o eyJhbGciOi…', autocomplete: 'off', spellcheck: 'false',
     value: own ? config.anonKey : '',
   });
   refs.cloudKeyField = campoClave;
 
   details.appendChild(el('div', { class: 'field' }, [
-    el('label', { class: 'field-label', for: 'cloud-key' }, 'Clave anon'),
+    el('label', { class: 'field-label', for: 'cloud-key' }, 'Clave pública (publishable o anon)'),
     campoClave,
   ]));
   details.appendChild(el('div', { class: 'row wrap', style: { gap: 'var(--sp-2)' } }, [
@@ -1990,6 +1994,21 @@ async function probarConexionNube() {
   }
 }
 
+/**
+ * Cómo se nombra la forma de la clave en el diagnóstico, en una línea.
+ *
+ * POR QUÉ SE DISTINGUEN LAS DOS FORMAS: Supabase emite la clásica «anon» (un
+ * JWT) y la nueva «publishable» (`sb_publishable_…`), y las dos valen. Decir de
+ * una clave nueva que «no es una clave de Supabase» (lo que se decía cuando solo
+ * se reconocía el `eyJ`) mandaría al usuario a buscar un problema que no existe.
+ */
+function formaDeLaClave(forma) {
+  if (forma === 'jwt') return ' · forma clásica «anon» (JWT)';
+  if (forma === 'publica') return ' · forma nueva «publishable»';
+  if (forma === 'secreta') return ' · es la clave SECRETA: no puede usarse en la app';
+  return ' · no tiene forma de clave de Supabase';
+}
+
 /** Pinta el diagnóstico, añadiendo los datos técnicos que solo conoce la vista. */
 function paintCloudTest(resultado) {
   const lineas = [];
@@ -2002,13 +2021,12 @@ function paintCloudTest(resultado) {
   lineas.push({ texto: `URL del proyecto: ${resultado.url || '(sin configurar)'}${deDonde}`, mono: true });
 
   // Solo la máscara: la clave entera no se enseña nunca en el diagnóstico. La
-  // longitud y el «empieza por eyJ» bastan para ver si se ha pegado a medias o
-  // si no es una clave de Supabase.
+  // longitud y la FORMA (clásica «anon» o nueva «publishable») bastan para ver
+  // si se ha pegado a medias o si no es una clave de Supabase.
   const clave = resultado.clave || {};
   lineas.push({
     texto: clave.hay
-      ? `Clave pública: ${clave.mascara} · ${clave.longitud} caracteres`
-        + (clave.pareceJwt ? ' · empieza por «eyJ»' : ' · NO empieza por «eyJ»: puede no ser una clave de Supabase')
+      ? `Clave pública: ${clave.mascara} · ${clave.longitud} caracteres${formaDeLaClave(clave.forma)}`
       : 'Clave pública: no hay ninguna guardada',
     mono: true,
   });
@@ -2020,7 +2038,7 @@ function paintCloudTest(resultado) {
   const sinGuardar = refs.cloudKeyField?.value?.trim();
   if (sinGuardar && sinGuardar !== cloudConfig().anonKey) {
     lineas.push({
-      texto: 'El campo «Clave anon» tiene otro valor sin guardar: pulsa «Guardar y recargar» y vuelve a probar.',
+      texto: 'El campo «Clave pública» tiene otro valor sin guardar: pulsa «Guardar y recargar» y vuelve a probar.',
       mono: false,
     });
   }
