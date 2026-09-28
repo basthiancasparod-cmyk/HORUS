@@ -14,10 +14,13 @@
 import {
   emptyDocument, normalizeDocument, createMember, createEntry, createPattern,
   normalizeEntry, normalizeShiftType, normalizePattern, normalizeDayMeta,
-  normalizeSettings, shiftTypeById, memberById, entryBlocks, entryType,
+  normalizeSettings, normalizeTeamId, shiftTypeById, memberById, entryBlocks, entryType,
   uid, initialsOf, PALETTE, SCHEMA_VERSION,
 } from './model.js';
 import { todayKey, addDays, monthKeyOf, normalizeBlocks } from './date.js';
+// El cambio de ámbito tiene que tirar el estado de sincronización del ámbito
+// anterior (ver `changeScope`): la clave de ese estado la conoce sync.js.
+import { resetSyncState } from './sync.js';
 
 const HISTORY_LIMIT = 60;
 
@@ -248,7 +251,7 @@ export function createStore(initialDoc = emptyDocument()) {
    */
   function documentFingerprint(d) {
     const head = [
-      d.meId, d.name, d.members.length, d.shiftTypes.length,
+      d.meId, d.name, d.teamId, d.members.length, d.shiftTypes.length,
       d.entries.length, d.patterns.length, Object.keys(d.dayMeta).length,
       JSON.stringify(d.settings),
     ].join('|');
@@ -735,6 +738,47 @@ export function createStore(initialDoc = emptyDocument()) {
 
     renameDocument(name) {
       return apply((d) => { d.name = String(name || '').slice(0, 60) || 'Mi calendario'; }, { label: 'renombrar calendario' });
+    },
+
+    /**
+     * Cambia el ÁMBITO del documento: `teamId` para llevarlo al cuadrante de un
+     * equipo, `null` para volver al personal.
+     *
+     * Por qué reinicia el estado de sincronización en el mismo paso: las marcas
+     * de agua, las huellas, los ids conocidos y las lápidas pendientes son del
+     * ámbito ANTERIOR. Si sobreviven al cambio, el primer pull del ámbito nuevo
+     * no baja nada (pregunta «lo cambiado desde X», y X es del otro cuadrante:
+     * todo lo que ya existía allí es más antiguo y queda fuera de la consulta) y
+     * las lápidas viejas borrarían filas del ámbito nuevo. Es un fallo mudo: ni
+     * error ni aviso, el cuadrante simplemente se ve vacío. Tampoco hay que
+     * marcar nada a mano para resubir: sin huellas, el siguiente push sube el
+     * documento entero al ámbito nuevo. De que el motor en marcha se dé cuenta
+     * se encarga `ensureScope()` en sync.js, que compara el ámbito del documento
+     * con el del estado guardado.
+     *
+     * Es UN SOLO paso de deshacer a propósito: media mudanza (documento en un
+     * ámbito y marcas de agua en otro) deja al motor bajando lo que no toca.
+     *
+     * Las filas del ámbito anterior NO se borran del servidor: no hay forma de
+     * moverlas entre ámbitos (el trigger del servidor lo prohíbe) y borrarlas
+     * sería temerario. Si algo sale mal, el cuadrante personal sigue ahí; y al
+     * volver a personal tampoco se pierde lo que se subió al equipo, porque se
+     * queda en el ámbito del equipo.
+     *
+     * @param {string|null} teamId uuid del equipo, o null para el ámbito personal
+     * @returns {boolean} true si el ámbito ha cambiado de verdad
+     */
+    changeScope(teamId = null) {
+      const target = teamId == null ? null : normalizeTeamId(teamId);
+      // Un id que no es uuid no puede ser ámbito: el servidor lo rechazaría.
+      // Devolver false y no tocar nada es mejor que caer a personal en silencio.
+      if (teamId != null && !target) return false;
+      if ((doc.teamId ?? null) === target) return false;
+      const changed = apply((d) => { d.teamId = target; }, {
+        label: target ? 'pasar el cuadrante al equipo' : 'volver al cuadrante personal',
+      });
+      if (changed) resetSyncState();
+      return changed;
     },
 
     importDocument(nextDoc, { merge = false } = {}) {

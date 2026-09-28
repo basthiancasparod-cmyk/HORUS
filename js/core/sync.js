@@ -19,6 +19,22 @@
  * Resolución de conflictos: gana la fila con `updatedAt` más reciente. Las
  * filas locales que perdieron se registran en `meta.conflicts` para que la
  * interfaz pueda avisar en lugar de mentir.
+ *
+ * Ámbitos (`owner_key`): cada fila pertenece a un ÁMBITO, que es el cuadrante
+ * personal de una cuenta ('user:<uuid>') o el cuadrante compartido de un
+ * equipo ('team:<uuid>'). El ámbito NO se guarda dentro del documento ni del
+ * estado: se deduce del documento (`doc.teamId`) y de la sesión con
+ * `ownerKeyFor()`, de modo que el mismo documento puede pasar de personal a
+ * equipo y volver. `owner_key` va en TODAS las filas que se suben y es el
+ * filtro de TODO lo que se baja. `user_id` se sigue mandando además: es «quién
+ * escribió la fila», el trigger del servidor lo espera y la app antigua lo usa.
+ *
+ * OJO con las operaciones de UNA fila: desde la migración 0002 la clave
+ * primaria es (owner_key, id), así que un `id` suelto YA NO identifica una
+ * fila. Dos ámbitos pueden tener el mismo id (cada dispositivo genera sus
+ * propios doc_…/m_…), y un PATCH o un DELETE filtrado solo por `id` tocaría la
+ * fila del otro ámbito. Aquí toda operación de una fila filtra por owner_key Y
+ * por id.
  */
 
 import { TABLES, CLOUD_SCHEMA } from '../config.js';
@@ -39,6 +55,10 @@ function emptyState() {
   return {
     schema: CLOUD_SCHEMA,
     docId: null,
+    // Ámbito ('user:<uuid>' o 'team:<uuid>') al que pertenece este estado. Si
+    // no coincide con el del documento, el estado entero se tira: ver
+    // `ensureScope()`.
+    ownerKey: null,
     lastPullAt: {},        // tabla → marca de agua (tiempo DEL SERVIDOR) del último pull
     lastPushAt: {},        // tabla → ISO timestamp del último push correcto
     ids: {},               // tabla → array de ids conocidos en el servidor
@@ -49,6 +69,24 @@ function emptyState() {
   };
 }
 
+/**
+ * Ámbito de un documento: el equipo si lo tiene, y si no el personal de quien
+ * tenga la sesión abierta.
+ *
+ * Es una función (y no un campo guardado) porque el ámbito cambia con el
+ * documento: el mismo dispositivo puede estar en su cuadrante personal y pasar
+ * al del equipo sin dejar de ser el mismo documento.
+ *
+ * @param {{teamId?:string|null}} doc
+ * @param {string|null} userId
+ * @returns {string|null} 'team:<uuid>', 'user:<uuid>', o null sin sesión ni equipo
+ */
+export function ownerKeyFor(doc, userId) {
+  const teamId = doc?.teamId || null;
+  if (teamId) return `team:${teamId}`;
+  return userId ? `user:${userId}` : null;
+}
+
 export function loadSyncState() {
   try {
     const raw = storage.get(SYNC_KEY);
@@ -57,6 +95,7 @@ export function loadSyncState() {
     if (!parsed || typeof parsed !== 'object') return emptyState();
     const base = emptyState();
     const merged = { ...base, ...parsed };
+    merged.ownerKey = typeof parsed.ownerKey === 'string' ? parsed.ownerKey : null;
     merged.lastPullAt = { ...(parsed.lastPullAt || {}) };
     merged.lastPushAt = { ...(parsed.lastPushAt || {}) };
     merged.ids = { ...(parsed.ids || {}) };
@@ -152,6 +191,16 @@ function entityFingerprint(key, entity, id) {
 /**
  * Definición de cada tabla: cómo extraer filas del documento y cómo
  * reconstruir el documento desde las filas.
+ *
+ * Solo están las tablas del cuadrante. `horus_teams` y `horus_team_members`
+ * son un caso aparte y este motor no las toca: su ámbito ya ES el equipo
+ * ('team:' || id / 'team:' || team_id, lo rellena el trigger del servidor) y
+ * sus consultas van por `owner_id` (equipos que he creado) y `user_id`
+ * (equipos en los que estoy), no por el `owner_key` por fila de aquí. Además
+ * `horus_team_members` se identifica por (team_id, user_id) y no tiene un `id`
+ * por fila, así que meterla en este mapa —que asume una clave por fila— la
+ * rompería. Cuando la fase de equipos necesite leerlas, querrá su propia
+ * consulta, no un descriptor más.
  */
 function buildDescriptors(doc) {
   return {
@@ -349,6 +398,39 @@ export function createSyncEngine(deps) {
     return () => listeners.delete(fn);
   }
 
+  /* ---------------- ámbito ---------------- */
+
+  /**
+   * Comprueba que el estado de sincronización es del ámbito del documento y,
+   * si no lo es, lo empieza de cero.
+   *
+   * POR QUÉ HAY QUE REINICIARLO (el fallo silencioso que esto evita):
+   * al pasar de personal a equipo (o al revés) las marcas de agua, las huellas,
+   * los ids y las lápidas son del ámbito ANTERIOR. La marca de agua es lo peor:
+   * el pull pregunta «dame lo cambiado desde X» y X es del otro cuadrante, así
+   * que todo lo que ya existía en el ámbito nuevo —que es más antiguo— queda
+   * fuera de la consulta y el usuario ve el cuadrante vacío sin ningún error,
+   * como si estuviera todo al día. Y las lápidas viejas borrarían filas del
+   * ámbito nuevo que este dispositivo ni siquiera conoce todavía.
+   * Al no quedar huellas, el siguiente push sube el documento entero al ámbito
+   * nuevo, que es justo lo que se quiere al mudarse.
+   *
+   * Se conservan los conflictos a propósito: son avisos para el usuario («esta
+   * edición tuya la pisó el servidor»), no marcas de agua; perderlos en
+   * silencio es lo contrario de lo que se pretende.
+   *
+   * @returns {string|null} el ámbito vigente, o null si no hay sesión ni equipo
+   */
+  function ensureScope() {
+    const scope = ownerKeyFor(getDoc(), currentSession()?.userId);
+    if (!scope) return null;
+    if (state.ownerKey !== scope) {
+      state = { ...emptyState(), ownerKey: scope, conflicts: state.conflicts || [] };
+      saveSyncState(state);
+    }
+    return scope;
+  }
+
   /* ---------------- cálculo de diferencias ---------------- */
 
   /**
@@ -356,6 +438,10 @@ export function createSyncEngine(deps) {
    * @returns {{toUpsert:object[], toDelete:object[], byTable:object, total:number}}
    */
   function diff() {
+    // El ámbito se revisa aquí porque `pendingCount()` pasa por aquí: tras un
+    // cambio de ámbito (personal ↔ equipo) lo pendiente es todo el documento,
+    // y eso solo es cierto si el estado del ámbito viejo ya se ha tirado.
+    ensureScope();
     const doc = getDoc();
     const descriptors = buildDescriptors(doc);
     const toUpsert = [];
@@ -446,12 +532,20 @@ export function createSyncEngine(deps) {
     }
   }
 
-  /** Inserta o actualiza un lote de filas en una tabla. */
-  async function upsertRows(table, rows) {
+  /**
+   * Inserta o actualiza un lote de filas en una tabla.
+   *
+   * Toda fila lleva su `owner_key` (el ámbito) además de `user_id`: la clave
+   * primaria del servidor es (owner_key, id), y sin el ámbito el trigger lo
+   * rellenaría con 'user:' || user_id, o sea, que una fila de equipo acabaría
+   * en el cuadrante personal de quien la escribe.
+   */
+  async function upsertRows(table, rows, ownerKey) {
     const userId = currentSession()?.userId;
-    if (!userId) throw new AuthError('No hay sesión iniciada.');
+    if (!userId || !ownerKey) throw new AuthError('No hay sesión iniciada.');
     const body = rows.map((r) => ({
       ...r,
+      owner_key: ownerKey,
       user_id: userId,
       deleted: false,
       updated_at: new Date().toISOString(),
@@ -467,15 +561,25 @@ export function createSyncEngine(deps) {
     if (!response.ok) throw new Error(`No se pudo guardar en ${table}: ${await readError(response)}`);
   }
 
-  /** Marca filas como borradas (borrado lógico, para poder propagarlo). */
-  async function tombstoneRows(table, ids) {
+  /**
+   * Marca filas como borradas (borrado lógico, para poder propagarlo).
+   *
+   * Filtra por `owner_key` Y por id, nunca solo por id: con la clave primaria
+   * (owner_key, id), el mismo id existe en varios ámbitos y un PATCH suelto
+   * marcaría como borrada la fila de otro cuadrante.
+   *
+   * Y NO filtra por `user_id`: en un equipo la fila puede haberla escrito otro
+   * miembro, así que un `user_id=eq.yo` no encontraría nada y el borrado se
+   * quedaría sin propagar (el turno volvería a aparecer en el siguiente pull).
+   */
+  async function tombstoneRows(table, ids, ownerKey) {
     if (!ids.length) return;
     const userId = currentSession()?.userId;
-    if (!userId) throw new AuthError('No hay sesión iniciada.');
+    if (!userId || !ownerKey) throw new AuthError('No hay sesión iniciada.');
     const list = ids.map((id) => `"${String(id).replace(/"/g, '')}"`).join(',');
     const pkColumn = table === TABLES.dayMeta ? 'day_date' : 'id';
     const response = await api(
-      `/rest/v1/${table}?${pkColumn}=in.(${list})&user_id=eq.${userId}`,
+      `/rest/v1/${table}?${pkColumn}=in.(${list})&owner_key=eq.${encodeURIComponent(ownerKey)}`,
       {
         method: 'PATCH',
         headers: { Prefer: 'return=minimal', 'Content-Type': 'application/json' },
@@ -493,6 +597,7 @@ export function createSyncEngine(deps) {
    */
   async function push({ full = false } = {}) {
     const doc = getDoc();
+    const scope = ensureScope();
     const descriptors = buildDescriptors(doc);
     const { toUpsert, toDelete } = diff();
     const upserts = full
@@ -512,7 +617,7 @@ export function createSyncEngine(deps) {
     for (const [table, items] of byTable) {
       for (let i = 0; i < items.length; i += BATCH_SIZE) {
         const chunk = items.slice(i, i + BATCH_SIZE);
-        await upsertRows(table, chunk.map((c) => c.row));
+        await upsertRows(table, chunk.map((c) => c.row), scope);
         // Solo se apunta la huella cuando el servidor ha aceptado el lote
         for (const c of chunk) {
           const key = c.key;
@@ -535,7 +640,7 @@ export function createSyncEngine(deps) {
     }
     for (const [table, ids] of delByTable) {
       for (let i = 0; i < ids.length; i += BATCH_SIZE) {
-        await tombstoneRows(table, ids.slice(i, i + BATCH_SIZE));
+        await tombstoneRows(table, ids.slice(i, i + BATCH_SIZE), scope);
       }
       const key = Object.keys(descriptors).find((k) => descriptors[k].table === table);
       if (key) {
@@ -560,6 +665,8 @@ export function createSyncEngine(deps) {
    */
   async function pull({ full = false } = {}) {
     const doc = getDoc();
+    const scope = ensureScope();
+    if (!scope) throw new AuthError('No hay sesión iniciada.');
     const descriptors = buildDescriptors(doc);
     const localHashes = Object.fromEntries(
       Object.entries(descriptors).map(([key, desc]) => {
@@ -579,7 +686,6 @@ export function createSyncEngine(deps) {
 
     let applied = 0;
     const conflicts = [];
-    const userId = currentSession()?.userId;
 
     for (const [key, desc] of Object.entries(descriptors)) {
       /* La marca de agua es `updated_at`, que la pone EL SERVIDOR al escribir.
@@ -593,10 +699,14 @@ export function createSyncEngine(deps) {
          el instante de corte; comparar la huella de cada fila hace que volver a
          aplicar una fila ya vista no cueste nada.
          Una marca antigua (numérica) se descarta: obliga a un pull completo una
-         vez y a partir de ahí todo va con la hora del servidor. */
+         vez y a partir de ahí todo va con la hora del servidor.
+         El filtro es por ÁMBITO (owner_key), no por user_id: el cuadrante del
+         equipo es de todos sus miembros y aquí hay que bajar también lo que
+         escribieron los demás. `owner_key` es, además, el prefijo del índice
+         (owner_key, deleted, updated_at) que creó la migración 0002. */
       const marca = state.lastPullAt[desc.table];
       const since = full || typeof marca !== 'string' ? null : marca;
-      let query = `/rest/v1/${desc.table}?user_id=eq.${userId}&select=*&limit=${PULL_LIMIT}`;
+      let query = `/rest/v1/${desc.table}?owner_key=eq.${encodeURIComponent(scope)}&select=*&limit=${PULL_LIMIT}`;
       if (since) query += `&updated_at=gte.${encodeURIComponent(since)}`;
       query += '&order=updated_at.asc';
 
@@ -800,14 +910,20 @@ export function createSyncEngine(deps) {
   }
 
   /**
-   * Borra definitivamente los datos en la nube (no toca el documento local).
+   * Borra definitivamente los datos del ámbito en la nube (no toca el
+   * documento local).
+   *
+   * OJO: el borrado es por ÁMBITO, así que en modo equipo se lleva por delante
+   * el cuadrante DEL EQUIPO, no solo lo que subió este dispositivo (es la
+   * misma semántica que tenía con user_id en el ámbito personal). La interfaz
+   * debería pedir una confirmación aparte para ese caso.
    */
   async function wipeCloud() {
-    const userId = currentSession()?.userId;
-    if (!userId) throw new AuthError('No hay sesión iniciada.');
+    const scope = ensureScope();
+    if (!scope) throw new AuthError('No hay sesión iniciada.');
     const descriptors = buildDescriptors(getDoc());
     for (const desc of Object.values(descriptors)) {
-      const response = await api(`/rest/v1/${desc.table}?user_id=eq.${userId}`, { method: 'DELETE' });
+      const response = await api(`/rest/v1/${desc.table}?owner_key=eq.${encodeURIComponent(scope)}`, { method: 'DELETE' });
       if (!response.ok && response.status !== 404) {
         throw new Error(`No se pudo vaciar ${desc.table}: ${await readError(response)}`);
       }
@@ -820,12 +936,12 @@ export function createSyncEngine(deps) {
 
   /** Cuántas filas hay en la nube ahora mismo (comprobación rápida). */
   async function cloudStats() {
-    const userId = currentSession()?.userId;
-    if (!userId) return null;
+    const scope = ensureScope();
+    if (!scope) return null;
     const descriptors = buildDescriptors(getDoc());
     const out = {};
     for (const [key, desc] of Object.entries(descriptors)) {
-      const response = await api(`/rest/v1/${desc.table}?user_id=eq.${userId}&deleted=eq.false&select=id`, {
+      const response = await api(`/rest/v1/${desc.table}?owner_key=eq.${encodeURIComponent(scope)}&deleted=eq.false&select=id`, {
         headers: { Prefer: 'count=exact', Range: '0-0' },
       });
       const range = response.headers.get('content-range') || '';
@@ -848,6 +964,12 @@ export function createSyncEngine(deps) {
     cloudStats,
     reset: () => { resetSyncState(); state = loadSyncState(); emit(); },
     get state() { return state; },
+    /**
+     * Ámbito vigente ('user:…' o 'team:…'), recalculado del documento. Preguntarlo
+     * es también un buen momento para enterarse de que ha cambiado: llama a
+     * `ensureScope()`, así que deja el estado interno en el ámbito correcto.
+     */
+    get ownerKey() { return ensureScope(); },
     get status() { return status; },
     get lastError() { return lastError; },
     get lastResult() { return lastResult; },

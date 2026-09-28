@@ -84,6 +84,9 @@ const { createStore } = await import('../js/core/store.js');
 
 /* --- fixtures -------------------------------------------------------- */
 
+/** uuid de equipo para las pruebas de ámbito (el servidor exige uuid). */
+const TEAM_ID = '11111111-2222-3333-4444-555555555555';
+
 function teamDoc() {
   const doc = model.bootstrapDocument({ name: 'Ana Ruiz', coworkers: ['Luis Peña', 'Eva Moral'] });
   const [ana, luis, eva] = doc.members;
@@ -99,6 +102,29 @@ function teamDoc() {
     model.createEntry({ id: 'e5', memberId: luis.id, date: '2025-06-05', typeId: M.id, blocks: [{ start: '10:00', end: '14:00' }, { start: '16:00', end: '20:00' }] }),
   ];
   doc.dayMeta['2025-06-06'] = model.normalizeDayMeta({ dayType: 'holiday', label: 'Corpus' });
+  return doc;
+}
+
+/** El mismo cuadrante, pero en el ámbito de un equipo. */
+function teamScopedDoc(teamId = TEAM_ID) {
+  const doc = teamDoc();
+  doc.teamId = teamId;
+  return doc;
+}
+
+/**
+ * Envejece todas las marcas de un documento. Sirve para simular un cuadrante
+ * que se subió al equipo hace un rato: así sus `updated_at` del servidor son
+ * MÁS ANTIGUOS que la marca de agua de un dispositivo que sincroniza ahora.
+ */
+function envejecer(doc, ms = 3600000) {
+  const t = Date.now() - ms;
+  for (const m of doc.members) { m.createdAt = t; m.updatedAt = t; }
+  for (const s of doc.shiftTypes) { s.createdAt = t; s.updatedAt = t; }
+  for (const e of doc.entries) { e.createdAt = t; e.updatedAt = t; }
+  for (const p of doc.patterns) { p.createdAt = t; p.updatedAt = t; }
+  for (const meta of Object.values(doc.dayMeta || {})) meta.updatedAt = t;
+  doc.updatedAt = t;
   return doc;
 }
 
@@ -433,12 +459,50 @@ test('fingerprint aguanta estructuras raras', () => {
   is(typeof syncMod.fingerprint(circular), 'string', 'no entra en bucle con referencias circulares');
 });
 
+/* ================================================================== *
+ * Ámbito del documento (personal o equipo)
+ * ================================================================== */
+
+suite('model.js y sync.js — el ámbito del documento');
+
+test('un documento sin teamId es personal (los documentos viejos no se rompen)', () => {
+  is(model.normalizeDocument(model.emptyDocument()).teamId, null, 'un documento nuevo es personal');
+  const antiguo = model.emptyDocument();
+  delete antiguo.teamId;
+  is(model.normalizeDocument(antiguo).teamId, null, 'sin el campo, personal');
+  is(model.emptyDocument().teamId, null);
+});
+
+test('el id de equipo se normaliza y la basura no se cuela como ámbito', () => {
+  is(model.normalizeDocument({ teamId: TEAM_ID }).teamId, TEAM_ID);
+  is(model.normalizeDocument({ teamId: TEAM_ID.toUpperCase() }).teamId, TEAM_ID, 'en minúsculas, como el servidor');
+  is(model.normalizeDocument({ teamId: 'no-es-un-uuid' }).teamId, null);
+  is(model.normalizeTeamId(''), null);
+  is(model.normalizeTeamId(null), null);
+});
+
+test('ownerKeyFor decide el ámbito a partir del documento y de la sesión', () => {
+  is(syncMod.ownerKeyFor({ teamId: null }, 'u-1'), 'user:u-1', 'personal: el ámbito sale de la sesión');
+  is(syncMod.ownerKeyFor({}, 'u-1'), 'user:u-1', 'sin campo, personal');
+  is(syncMod.ownerKeyFor({ teamId: TEAM_ID }, 'u-1'), `team:${TEAM_ID}`, 'con equipo manda el equipo');
+  is(syncMod.ownerKeyFor({ teamId: TEAM_ID }, null), `team:${TEAM_ID}`, 'el equipo no necesita sesión');
+  is(syncMod.ownerKeyFor({ teamId: null }, null), null, 'sin sesión ni equipo no hay ámbito');
+});
+
 /* ------------------------------------------------------------------ *
  * Supabase falso: implementa lo justo del API REST que usa el motor
+ *
+ * Desde el esquema por ámbito (migración 0002) la clave de una fila es
+ * (owner_key, id), así que aquí se guardan igual: con el MISMO id puede haber
+ * una fila por ámbito, que es justo lo que hay que poder distinguir. El filtro
+ * `owner_key` (y `user_id`, `updated_at`, `deleted`…) se aplica solo si la
+ * consulta lo trae, como en PostgREST: si el motor se olvidara de filtrar por
+ * ámbito, el falso tocaría las filas de los dos ámbitos y la prueba fallaría.
+ * Lo que el falso NO simula es RLS: quien pregunta puede verlo todo.
  * ------------------------------------------------------------------ */
 
 function createFakeSupabase() {
-  const tables = new Map(); // table -> Map(id -> row)
+  const tables = new Map(); // tabla -> Map(clave (ámbito|id) -> fila)
   const calls = [];
   let failNext = null;
 
@@ -448,7 +512,7 @@ function createFakeSupabase() {
   };
 
   const parseQuery = (url) => {
-    const [path, query = ''] = url.split('?');
+    const [path, query = ''] = String(url).split('?');
     const table = path.replace(/^.*\/rest\/v1\//, '');
     const params = new URLSearchParams(query);
     return { table, params };
@@ -456,10 +520,72 @@ function createFakeSupabase() {
 
   const pkOf = (table) => (table === 'horus_day_meta' ? 'day_date' : 'id');
 
+  /**
+   * Ámbito de una fila, igual que el trigger del servidor: si la fila no trae
+   * `owner_key`, sale de user_id (tablas del cuadrante), del id (horus_teams) o
+   * del team_id (horus_team_members).
+   */
+  function scopeOfRow(table, row) {
+    if (row.owner_key) return String(row.owner_key);
+    if (table === 'horus_teams') return `team:${row.id}`;
+    if (table === 'horus_team_members') return `team:${row.team_id}`;
+    return `user:${row.user_id}`;
+  }
+
+  const rowKey = (table, row) => `${scopeOfRow(table, row)}|${row[pkOf(table)]}`;
+
+  function parseInFilter(value) {
+    if (!value || !value.startsWith('in.(')) return [];
+    return value.slice(4, -1).split(',').map((s) => s.replace(/^"|"$/g, ''));
+  }
+
+  /** Filtra como PostgREST: solo por los parámetros que vienen en la consulta. */
+  function matchRows(table, params) {
+    const pk = pkOf(table);
+    let list = [...tableOf(table).values()];
+
+    const inIds = parseInFilter(params.get(pk));
+    if (inIds.length) list = list.filter((r) => inIds.includes(String(r[pk])));
+
+    const owner = params.get('owner_key');
+    if (owner?.startsWith('eq.')) {
+      const want = owner.slice(3);
+      list = list.filter((r) => scopeOfRow(table, r) === want);
+    }
+
+    const userId = params.get('user_id');
+    if (userId?.startsWith('eq.')) {
+      const want = userId.slice(3);
+      list = list.filter((r) => String(r.user_id) === want);
+    }
+
+    const deletedFilter = params.get('deleted');
+    if (deletedFilter?.startsWith('eq.')) {
+      const want = deletedFilter.slice(3) === 'true';
+      list = list.filter((r) => (r.deleted === true) === want);
+    }
+
+    // Marca de agua del servidor (`updated_at`), que es la que usa el motor.
+    // Se admite `gte.` porque la consulta real pide el corte incluido.
+    const porServidor = params.get('updated_at');
+    if (porServidor?.startsWith('gte.')) {
+      const corte = porServidor.slice(4);
+      list = list.filter((r) => String(r.updated_at) >= corte);
+    }
+
+    const since = params.get('client_updated_at');
+    if (since?.startsWith('gt.')) {
+      const threshold = Number(since.slice(3)) || 0;
+      list = list.filter((r) => (Number(r.client_updated_at) || 0) > threshold);
+    }
+
+    return list;
+  }
+
   const fetchImpl = async (url, opts = {}) => {
     const method = (opts.method || 'GET').toUpperCase();
     const { table, params } = parseQuery(url);
-    calls.push({ method, table, body: opts.body ? JSON.parse(opts.body) : null });
+    calls.push({ method, table, url: String(url), body: opts.body ? JSON.parse(opts.body) : null });
 
     if (failNext) {
       const err = failNext;
@@ -467,15 +593,15 @@ function createFakeSupabase() {
       return { ok: false, status: err.status || 500, statusText: 'Error', text: async () => JSON.stringify({ message: err.message }) };
     }
 
-    const rows = tableOf(table);
-
     if (method === 'POST') {
       const body = JSON.parse(opts.body);
       for (const row of body) {
-        // `updated_at` del servidor se deriva de la marca del cliente para que
-        // las marcas de agua del pull sean coherentes en las pruebas.
-        rows.set(String(row[pkOf(table)]), {
+        const scope = scopeOfRow(table, row);
+        tableOf(table).set(`${scope}|${row[pkOf(table)]}`, {
           ...row,
+          owner_key: scope,
+          // `updated_at` del servidor se deriva de la marca del cliente para que
+          // las marcas de agua del pull sean coherentes en las pruebas.
           updated_at: new Date(Number(row.client_updated_at) || Date.now()).toISOString(),
         });
       }
@@ -484,55 +610,33 @@ function createFakeSupabase() {
 
     if (method === 'PATCH') {
       const body = JSON.parse(opts.body);
-      const ids = parseInFilter(params.get(pkOf(table)));
-      for (const id of ids) {
-        const existing = rows.get(id);
-        if (existing) {
-          rows.set(id, {
-            ...existing,
-            ...body,
-            updated_at: new Date(Number(body.client_updated_at) || Date.parse(body.updated_at) || Date.now()).toISOString(),
-          });
+      for (const existing of matchRows(table, params)) {
+        // El trigger del servidor prohíbe mover una fila de ámbito con un UPDATE.
+        if (body.owner_key && body.owner_key !== scopeOfRow(table, existing)) {
+          return {
+            ok: false,
+            status: 403,
+            statusText: 'Forbidden',
+            text: async () => JSON.stringify({ message: 'HORUS: el ámbito de una fila (owner_key) no se puede cambiar por un UPDATE.' }),
+          };
         }
-      }
-      if (!ids.length) {
-        const userId = params.get('user_id')?.replace('eq.', '');
-        for (const [id, row] of [...rows]) {
-          if (row.user_id === userId) rows.set(id, { ...row, ...body });
-        }
+        tableOf(table).set(rowKey(table, existing), {
+          ...existing,
+          ...body,
+          updated_at: new Date(Number(body.client_updated_at) || Date.parse(body.updated_at) || Date.now()).toISOString(),
+        });
       }
       return { ok: true, status: 204, headers: { get: () => null }, text: async () => '' };
     }
 
     if (method === 'DELETE') {
-      const userId = params.get('user_id')?.replace('eq.', '');
-      for (const [id, row] of [...rows]) {
-        if (row.user_id === userId) rows.delete(id);
-      }
+      for (const row of matchRows(table, params)) tableOf(table).delete(rowKey(table, row));
       return { ok: true, status: 204, headers: { get: () => null }, text: async () => '' };
     }
 
     // GET
-    const userId = params.get('user_id')?.replace('eq.', '');
-    let list = [...rows.values()].filter((r) => !userId || r.user_id === userId);
-    // Marca de agua del servidor (`updated_at`), que es la que usa el motor.
-    // Se admite `gte.` porque la consulta real pide el corte incluido.
-    const porServidor = params.get('updated_at');
-    if (porServidor?.startsWith('gte.')) {
-      const corte = decodeURIComponent(porServidor.slice(4));
-      list = list.filter((r) => String(r.updated_at) >= corte);
-    }
-    const since = params.get('client_updated_at');
-    if (since?.startsWith('gt.')) {
-      const threshold = Number(since.slice(3)) || 0;
-      list = list.filter((r) => (Number(r.client_updated_at) || 0) > threshold);
-    }
-    const deletedFilter = params.get('deleted');
-    if (deletedFilter?.startsWith('eq.')) {
-      const want = deletedFilter.slice(3) === 'true';
-      list = list.filter((r) => (r.deleted === true) === want);
-    }
-    list.sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)));
+    const list = matchRows(table, params)
+      .sort((a, b) => String(a.updated_at).localeCompare(String(b.updated_at)));
     const contentRange = `0-${Math.max(0, list.length - 1)}/${list.length}`;
     return {
       ok: true,
@@ -543,11 +647,6 @@ function createFakeSupabase() {
     };
   };
 
-  function parseInFilter(value) {
-    if (!value || !value.startsWith('in.(')) return [];
-    return value.slice(4, -1).split(',').map((s) => s.replace(/^"|"$/g, ''));
-  }
-
   return {
     fetchImpl,
     tables,
@@ -555,15 +654,23 @@ function createFakeSupabase() {
     failNextWith: (err) => { failNext = err; },
     count: (table) => tableOf(table).size,
     all: (table) => [...tableOf(table).values()],
-    seed: (table, rows) => { for (const r of rows) tableOf(table).set(String(r[pkOf(table)]), r); },
+    seed: (table, rows) => {
+      for (const r of rows) {
+        const scope = scopeOfRow(table, r);
+        tableOf(table).set(`${scope}|${r[pkOf(table)]}`, { ...r, owner_key: scope });
+      }
+    },
     /**
      * Simula una edición hecha en otro dispositivo por `stamp`.
      * Las claves sueltas (`notes`, `blocks`, …) se aplican TANTO a las columnas
      * como al `payload`, que es lo que hace el servidor real al recibir una fila.
+     * `ownerKey` hace falta cuando el mismo id existe en dos ámbitos.
      */
-    remoteEdit(table, id, changes, stamp) {
-      const row = tableOf(table).get(String(id));
-      if (!row) throw new Error(`no existe la fila ${table}/${id} en el servidor falso`);
+    remoteEdit(table, id, changes, stamp, ownerKey = null) {
+      const pk = pkOf(table);
+      const row = [...tableOf(table).values()].find((r) => String(r[pk]) === String(id)
+        && (ownerKey == null || scopeOfRow(table, r) === ownerKey));
+      if (!row) throw new Error(`no existe la fila ${table}/${id}${ownerKey ? ` en ${ownerKey}` : ''} en el servidor falso`);
       const payloadChanges = {};
       for (const [k, v] of Object.entries(changes)) {
         if (k === 'payload') continue;
@@ -586,7 +693,7 @@ function createFakeSupabase() {
         updated_at: new Date().toISOString(),
       };
       delete next.payload.deleted;
-      tableOf(table).set(String(id), next);
+      tableOf(table).set(rowKey(table, next), next);
       return next;
     },
     /** Vacía el servidor falso para aislar una prueba. */
@@ -639,6 +746,16 @@ function engineFor(initialDoc) {
 function resetWorld() {
   mem.clear();
   fake.reset();
+}
+
+/**
+ * Simula OTRO dispositivo: tira el estado de sincronización guardado, que es
+ * lo único que dos navegadores distintos no comparten. Sin esto, el segundo
+ * motor arrancaría con las marcas de agua y los ids del primero (sería el mismo
+ * dispositivo con dos documentos, no dos dispositivos).
+ */
+function otroDispositivo() {
+  syncMod.resetSyncState();
 }
 
 await testAsync('un documento nuevo se sube entero', async () => {
@@ -921,6 +1038,224 @@ await testAsync('los tipos de turno y las personas se suben antes que los turnos
   const firstEntries = order.indexOf('horus_entries');
   ok(order.indexOf('horus_shift_types') < firstEntries, 'los tipos van antes');
   ok(order.indexOf('horus_members') < firstEntries, 'las personas van antes');
+});
+
+/* ================================================================== *
+ * Ámbitos: cuadrante personal y cuadrante de equipo
+ * ================================================================== */
+
+suite('sync.js — ámbitos (cuadrante de equipo)');
+
+const TABLAS_CUADRANTE = ['horus_entries', 'horus_members', 'horus_shift_types', 'horus_day_meta'];
+
+await testAsync('sin equipo, las filas se suben en el ámbito personal y con user_id', async () => {
+  resetWorld();
+  const { engine } = engineFor(teamDoc());
+  await engine.sync();
+
+  const filas = TABLAS_CUADRANTE.flatMap((t) => fake.all(t));
+  ok(filas.length > 0, 'se subió algo');
+  for (const fila of filas) {
+    is(fila.owner_key, 'user:u-1', 'el ámbito personal sale de la sesión, no del documento');
+    is(fila.user_id, 'u-1', 'user_id se sigue mandando: el trigger del servidor lo espera');
+  }
+  is(engine.state.ownerKey, 'user:u-1');
+});
+
+await testAsync('con equipo, las filas se suben en el ámbito del equipo', async () => {
+  resetWorld();
+  const { engine } = engineFor(teamScopedDoc());
+  await engine.sync();
+
+  for (const tabla of TABLAS_CUADRANTE) {
+    const filas = fake.all(tabla);
+    ok(filas.length > 0, `se subió ${tabla}`);
+    for (const fila of filas) {
+      is(fila.owner_key, `team:${TEAM_ID}`, `${tabla}: ámbito del equipo`);
+      is(fila.user_id, 'u-1', 'el autor sigue siendo quien escribe');
+    }
+  }
+  is(engine.state.ownerKey, `team:${TEAM_ID}`);
+  is(fake.all('horus_entries').filter((r) => r.owner_key === 'user:u-1').length, 0, 'nada se fue al ámbito personal');
+});
+
+await testAsync('dos dispositivos del mismo equipo comparten el cuadrante', async () => {
+  resetWorld();
+  const a = engineFor(teamScopedDoc());
+  await a.engine.sync();
+  const turnosDeA = a.get().entries.map((e) => [e.id, e.memberId]);
+
+  // El segundo dispositivo acaba de entrar en el equipo: apenas tiene su ficha.
+  const bDoc = model.bootstrapDocument({ name: 'Luis Peña' });
+  bDoc.teamId = TEAM_ID;
+  otroDispositivo();
+  const b = engineFor(bDoc);
+  await b.engine.sync();
+
+  ok(b.get().entries.some((e) => e.id === 'e1'), 'B recibe los turnos que ya había en el equipo');
+  for (const [id, memberId] of turnosDeA) {
+    is(b.get().entries.find((e) => e.id === id).memberId, memberId, 'el turno bajado es el de A, no una copia de B');
+  }
+  ok(b.get().members.some((m) => m.name === 'Ana Ruiz'), 'y también sus personas');
+
+  // Un cambio de A llega a B
+  a.store.actions.updateEntry('e1', { notes: 'Cambiado por A' });
+  await a.engine.sync();
+  await b.engine.sync();
+  is(b.get().entries.find((e) => e.id === 'e1').notes, 'Cambiado por A', 'el cambio de A llega a B');
+});
+
+await testAsync('un dispositivo personal no ve el cuadrante del equipo, ni al revés', async () => {
+  resetWorld();
+  const equipo = engineFor(teamScopedDoc());
+  await equipo.engine.sync();
+  const genteDelEquipo = new Set(equipo.get().members.map((m) => m.id));
+
+  otroDispositivo();
+  const personal = engineFor(teamDoc());
+  await personal.engine.sync();
+  const gentePersonal = new Set(personal.get().members.map((m) => m.id));
+
+  // Pull COMPLETO: sin marca de agua que estorbe, lo único que puede separar
+  // los dos cuadrantes es el filtro por ámbito de la consulta.
+  await personal.engine.pull({ full: true });
+  notOk(personal.get().members.some((m) => genteDelEquipo.has(m.id)), 'el personal no ve a la gente del equipo');
+
+  await equipo.engine.pull({ full: true });
+  notOk(equipo.get().members.some((m) => gentePersonal.has(m.id)), 'el equipo no ve el cuadrante personal');
+
+  // Y en el servidor cada fila está en su ámbito, sin mezclarse
+  is(fake.all('horus_members').filter((r) => r.owner_key === `team:${TEAM_ID}`).length, 3);
+  is(fake.all('horus_members').filter((r) => r.owner_key === 'user:u-1').length, 3);
+
+  // Todas las consultas de lectura van filtradas por ámbito
+  const lecturas = fake.calls.filter((c) => c.method === 'GET');
+  ok(lecturas.length > 0, 'hubo lecturas');
+  for (const llamada of lecturas) {
+    includes(llamada.url, 'owner_key=eq.', `la lectura de ${llamada.table} filtra por ámbito`);
+  }
+});
+
+/**
+ * LA PRUEBA DEL FALLO SILENCIOSO.
+ *
+ * El equipo ya tenía cuadrante, subido hace una hora. Este dispositivo acaba de
+ * sincronizar en modo personal, así que su marca de agua es de AHORA: si al
+ * pasar al equipo no se reiniciara el estado, el primer pull preguntaría «lo
+ * cambiado desde ahora» y TODO lo que ya había en el equipo (más antiguo) se
+ * quedaría fuera de la consulta. El cuadrante se vería vacío y sin ningún error.
+ */
+await testAsync('al pasar a equipo, el estado de sincronización se reinicia y el primer pull trae lo del equipo', async () => {
+  resetWorld();
+
+  const equipoViejo = teamScopedDoc();
+  // Ids de otro dispositivo: si coincidieran con los de este, el pull tendría
+  // que decidir entre dos versiones de la misma fila y no se probaría nada.
+  for (const e of equipoViejo.entries) e.id = `eq_${e.id}`;
+  envejecer(equipoViejo, 3600000);
+  const equipo = engineFor(equipoViejo);
+  await equipo.engine.sync();
+
+  otroDispositivo();
+  const mio = engineFor(teamDoc());
+  await mio.engine.sync();
+  ok(Object.keys(mio.engine.state.lastPullAt).length > 0, 'hay marcas de agua del ámbito personal');
+  ok(Object.keys(mio.engine.state.hashes).length > 0, 'y huellas');
+  ok(mio.engine.state.ids.entries?.length > 0, 'y ids conocidos del servidor');
+  // La marca que, si sobreviviera, dejaría sordo al dispositivo en el otro ámbito.
+  const marcaPersonal = mio.engine.state.lastPullAt.horus_entries;
+
+  ok(mio.store.actions.changeScope(TEAM_ID), 'el ámbito cambia al equipo');
+  is(syncMod.loadSyncState().ownerKey, null, 'el estado guardado se tira: un motor nuevo arranca sin ámbito');
+
+  // Cualquier cálculo del motor (pendingCount, push, pull) revisa el ámbito y
+  // se da cuenta del cambio: aquí se fuerza ese paso.
+  ok(mio.engine.pendingCount() > 0, 'todo el documento queda pendiente de subir al ámbito nuevo');
+  is(mio.engine.ownerKey, `team:${TEAM_ID}`, 'el motor trabaja ya en el ámbito del equipo');
+  is(Object.keys(mio.engine.state.lastPullAt).length, 0, 'sin marcas de agua: con ellas, el pull se saltaría todo lo anterior');
+  is(Object.keys(mio.engine.state.hashes).length, 0, 'sin huellas: el push sube el documento entero');
+  is(Object.keys(mio.engine.state.ids).length, 0, 'sin ids: no se dan por borradas filas del equipo que aún no se conocen');
+  is(mio.engine.state.tombstones.length, 0, 'sin lápidas: las del ámbito viejo borrarían filas del nuevo');
+
+  const bajado = await mio.engine.pull();
+  ok(bajado.applied > 0, 'el primer pull trae algo');
+  ok(mio.get().entries.some((e) => e.id === 'eq_e1'), 'los turnos que ya estaban en el equipo llegan');
+  ok(mio.get().members.some((m) => m.name === 'Ana Ruiz'), 'y sus personas');
+  ok(mio.get().dayMeta['2025-06-06'], 'y los metadatos de día');
+  is(typeof mio.engine.state.lastPullAt.horus_entries, 'string', 'la marca de agua se rehace con la hora del servidor');
+  // Esto es lo que hace falta demostrar: lo que ha llegado es MÁS ANTIGUO que
+  // la marca de agua del ámbito personal. Sin el reinicio, la consulta («lo
+  // cambiado desde marcaPersonal») no lo habría traído nunca.
+  const filaDelEquipo = fake.all('horus_entries').find((r) => r.owner_key === `team:${TEAM_ID}`);
+  ok(filaDelEquipo.updated_at < marcaPersonal, 'la fila del equipo es anterior a la marca de agua personal');
+});
+
+await testAsync('al volver a personal, lo que se subió al equipo sigue en el equipo', async () => {
+  resetWorld();
+  const { store, engine } = engineFor(teamScopedDoc());
+  await engine.sync();
+  const enElEquipo = fake.all('horus_entries').filter((r) => r.owner_key === `team:${TEAM_ID}`).length;
+  is(enElEquipo, 5, 'el equipo tiene el cuadrante');
+
+  ok(store.actions.changeScope(null), 'se vuelve al ámbito personal');
+  is(store.doc.teamId, null);
+  await engine.sync();
+
+  is(fake.all('horus_entries').filter((r) => r.owner_key === `team:${TEAM_ID}` && !r.deleted).length, 5, 'nada del equipo se borra');
+  is(fake.all('horus_entries').filter((r) => r.owner_key === 'user:u-1').length, 5, 'y el cuadrante se sube al ámbito personal');
+  is(engine.state.ownerKey, 'user:u-1');
+});
+
+await testAsync('cambiar de ámbito se puede deshacer en un solo paso', async () => {
+  resetWorld();
+  const { store, engine } = engineFor(teamDoc());
+  is(store.doc.teamId, null, 'se empieza en personal');
+  is(store.historySize(), 0, 'sin historial todavía');
+
+  ok(store.actions.changeScope(TEAM_ID), 'se pasa al equipo');
+  is(store.doc.teamId, TEAM_ID);
+  is(store.historySize(), 1, 'es un solo paso de deshacer');
+  is(store.undoLabel(), 'pasar el cuadrante al equipo');
+  is(syncMod.loadSyncState().ownerKey, null, 'y deja el estado de sincronización tirado');
+
+  ok(store.undo(), 'se puede deshacer');
+  is(store.doc.teamId, null, 'vuelve al ámbito personal');
+  ok(store.redo(), 'y rehacer');
+  is(store.doc.teamId, TEAM_ID);
+
+  notOk(store.actions.changeScope('no-es-un-uuid'), 'un id de equipo que no es uuid se rechaza');
+  is(store.doc.teamId, TEAM_ID, 'y no toca el ámbito');
+  notOk(store.actions.changeScope(TEAM_ID), 'cambiar al mismo ámbito no hace nada');
+  is(syncMod.loadSyncState().ownerKey, null, 'el estado sigue sin restaurarse: cada vuelta baja del ámbito que toque');
+});
+
+await testAsync('un borrado con el mismo id no toca la fila del otro ámbito', async () => {
+  resetWorld();
+  // Dos cuadrantes que comparten los ids de los turnos ('e1'…): con la clave
+  // primaria (owner_key, id), un id suelto ya no identifica una fila.
+  const personal = engineFor(teamDoc());
+  await personal.engine.sync();
+  otroDispositivo();
+  const equipo = engineFor(teamScopedDoc());
+  await equipo.engine.sync();
+  is(fake.all('horus_entries').filter((r) => r.id === 'e1').length, 2, 'hay dos filas con el id e1, una por ámbito');
+
+  const e1 = personal.get().entries.find((e) => e.id === 'e1');
+  personal.store.actions.removeEntries({ memberId: e1.memberId, date: e1.date });
+  await personal.engine.sync();
+
+  const mio = fake.all('horus_entries').find((r) => r.id === 'e1' && r.owner_key === 'user:u-1');
+  const ajeno = fake.all('horus_entries').find((r) => r.id === 'e1' && r.owner_key === `team:${TEAM_ID}`);
+  is(mio.deleted, true, 'la fila de mi ámbito se marca como borrada');
+  notOk(ajeno.deleted, 'y la del equipo se queda como estaba');
+
+  const patch = fake.calls.find((c) => c.method === 'PATCH' && c.table === 'horus_entries');
+  includes(patch.url, `owner_key=eq.${encodeURIComponent('user:u-1')}`, 'el borrado filtra por ámbito');
+  includes(patch.url, 'id=in.(', 'y por id');
+
+  // El otro ámbito no se entera del borrado ni al bajar cambios
+  await equipo.engine.sync();
+  ok(equipo.get().entries.some((e) => e.id === 'e1'), 'el equipo conserva su turno');
 });
 
 /* ================================================================== *

@@ -6,6 +6,7 @@
  * {
  *   schema: 4,
  *   meId: 'm_xxx',                  // miembro que representa a esta cuenta
+ *   teamId: 'uuid' | null,          // ámbito: equipo, o null = cuadrante personal
  *   members:      Member[],
  *   shiftTypes:   ShiftType[],
  *   entries:      ShiftEntry[],     // todas las asignaciones de todos los miembros
@@ -245,6 +246,13 @@ export function emptyDocument() {
     schema: SCHEMA_VERSION,
     id: uid('doc'),
     name: 'Mi calendario',
+    // El ÁMBITO del documento: con equipo, todas sus filas viven en el
+    // cuadrante compartido; con null, en el personal de la cuenta. El user_id
+    // NO se guarda aquí a propósito: el ámbito personal se deduce de la sesión
+    // (ver `ownerKeyFor` en sync.js), así que el mismo documento sirve para
+    // cualquier cuenta y los documentos viejos (sin `teamId`) siguen siendo
+    // personales sin migrar nada.
+    teamId: null,
     meId: me.id,
     members: [me],
     shiftTypes: defaultShiftTypes(),
@@ -290,6 +298,24 @@ const clampNum = (v, min, max, fallback) => {
 const isHex = (c) => /^#[0-9A-Fa-f]{6}$/.test(String(c || ''));
 const safeHex = (c, fallback = '#8A93A8') => (isHex(c) ? String(c).toUpperCase() : fallback);
 const str = (v, max = 200) => String(v ?? '').slice(0, max);
+
+// El servidor exige que el ámbito cumpla '^(user|team):[0-9a-f-]{36}$', así que
+// un id de equipo que no sea un uuid no puede ser ámbito de nada.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Id de equipo normalizado, o null si no lo es (ámbito personal).
+ *
+ * Por qué se valida aquí y no se deja pasar tal cual: el `owner_key` que sale
+ * de aquí acaba en la URL del pull y en el cuerpo del push, y el servidor lo
+ * rechaza con un error lejano (400 / violación de check) que no dice nada útil.
+ * Ante un id con mala pinta se cae a PERSONAL, que es el ámbito en el que el
+ * documento ya estaba: nunca se inventa una pertenencia a un equipo.
+ */
+export function normalizeTeamId(value) {
+  const s = str(value, 40).trim().toLowerCase();
+  return UUID_RE.test(s) ? s : null;
+}
 
 export function normalizeShiftType(raw, index = 0) {
   const s = raw && typeof raw === 'object' ? raw : {};
@@ -485,6 +511,9 @@ export function normalizeDocument(raw) {
     schema: SCHEMA_VERSION,
     id: str(raw.id, 60) || uid('doc'),
     name: str(raw.name, 60).trim() || 'Mi calendario',
+    // Un documento sin `teamId` (todos los que hay hoy) es personal: no hace
+    // falta migración ni versión de esquema nueva.
+    teamId: normalizeTeamId(raw.teamId),
     meId,
     members,
     shiftTypes,
