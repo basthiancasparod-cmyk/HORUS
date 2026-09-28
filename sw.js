@@ -15,7 +15,11 @@
  *     si fueran actuales sería peor que no responder.
  */
 
-const VERSION = 'v4.19.0';
+// v4.20.0: la capa de equipos sale por la misma puerta que el resto de la app
+// (las cabeceras `apikey`/`Authorization` de `auth.js`). `teams.js` está en el
+// precache, así que sin subir esto el navegador seguiría sirviendo el módulo
+// viejo y el arreglo no llegaría a quien lo necesita.
+const VERSION = 'v4.20.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 

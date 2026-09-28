@@ -11,7 +11,7 @@
  * Ejecutar: node tests/smoke.mjs
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { installDOM } from './dom.mjs';
@@ -1480,6 +1480,12 @@ await itAsync('la clave de IA se guarda solo en las preferencias locales (nunca 
  * todo): lo que se prueba es que la interfaz usa bien la capa de datos y que
  * la decisión de «quién escribe» se aplica en la pantalla.
  *
+ * Lo que SÍ se simula es el corte del servidor por falta de `apikey`: cualquier
+ * petición que llegue sin esa cabecera se rechaza con el mismo 401 y el mismo
+ * mensaje que da Supabase de verdad. Sin eso, una petición sin cabeceras
+ * «funcionaría» en las pruebas y fallaría en la aplicación real, que es
+ * exactamente lo que pasó. Ver la sección 13.
+ *
  * Ojo con los ids: `actions.changeScope` solo acepta uuid (el servidor lo
  * exige por el formato de `owner_key`), así que el falso genera uuids de
  * verdad, y cada prueba usa equipos distintos para no reutilizar el estado
@@ -1585,16 +1591,45 @@ function crearNubeDeEquipos() {
     ok: true, status, headers: { get: () => null },
     json: async () => json, text: async () => JSON.stringify(json),
   });
-  const fallo = ({ status = 500, message = 'error' } = {}) => ({
-    ok: false, status, statusText: 'Error',
-    json: async () => ({ message }), text: async () => JSON.stringify({ message }),
-  });
+  const fallo = ({ status = 500, message = 'error', hint = null } = {}) => {
+    const cuerpo = hint ? { message, hint } : { message };
+    return {
+      ok: false, status, statusText: 'Error',
+      json: async () => cuerpo, text: async () => JSON.stringify(cuerpo),
+    };
+  };
+
+  /** Cabeceras en minúscula: el servidor las mira sin distinguir mayúsculas. */
+  function cabecerasDe(opts) {
+    const salida = {};
+    for (const [nombre, valor] of Object.entries(opts.headers || {})) {
+      salida[String(nombre).toLowerCase()] = valor;
+    }
+    return salida;
+  }
 
   async function fetchImpl(url, opts = {}) {
     const metodo = String(opts.method || 'GET').toUpperCase();
     const [ruta, consulta = ''] = String(url).split('?');
     const params = new URLSearchParams(consulta);
-    llamadas.push({ metodo, url: String(url), cuerpo: opts.body ? JSON.parse(opts.body) : null });
+    const cabeceras = cabecerasDe(opts);
+    llamadas.push({
+      metodo, url: String(url), cabeceras,
+      cuerpo: opts.body ? JSON.parse(opts.body) : null,
+    });
+
+    // El servidor de verdad corta AQUÍ, antes de mirar la tabla o la fila: sin
+    // `apikey` no sabe de qué proyecto es la petición, así que responde 401 con
+    // este mismo cuerpo y `auth.uid()` nunca llega a rellenarse (la fila acaba
+    // rechazada por RLS). Reproducirlo es lo que hace que estas pruebas
+    // detecten el fallo en vez de taparlo.
+    if (!cabeceras.apikey) {
+      return fallo({
+        status: 401,
+        message: 'No API key found in request',
+        hint: 'No `apikey` request header or url param was found.',
+      });
+    }
 
     if (ruta.includes('/rpc/horus_join_team')) {
       const res = unirPorCodigo(opts.body ? JSON.parse(opts.body).p_code : '');
@@ -1979,6 +2014,212 @@ await itAsync('elegir un equipo de la lista pide confirmación antes de mover el
   env.document.getElementById('confirm-ok').click();
   await sleep(40);
   is(store.doc.teamId, UUID_LISTA, 'al aceptar, el cuadrante pasa al equipo');
+});
+
+/* ==================================================================== *
+ * 13. Las cabeceras de Supabase: la regresión del `apikey`
+ *
+ * El fallo ya se coló una vez, y llegó desde la aplicación real:
+ * «No se pudo crear el equipo: new row violates row-level security policy for
+ * table "horus_teams"» acompañado de «No API key found in request». Lo que
+ * explica ese par de mensajes es que la petición salga SIN la cabecera
+ * `apikey`: el servidor entonces no sabe de qué proyecto es, `auth.uid()` llega
+ * nulo y RLS rechaza la fila con un mensaje que no habla de la causa real.
+ *
+ * Lo que se prueba aquí no es «que hoy funciona», sino que el fallo no puede
+ * volver en silencio:
+ *   · el Supabase falso graba TODAS las peticiones con sus cabeceras;
+ *   · rechaza las que van sin `apikey` con el mismo 401 y el mismo cuerpo que
+ *     el servidor de verdad, así que una petición sin cabeceras ya no puede
+ *     «aprobar» en las pruebas;
+ *   · se comprueban las cuatro funciones que fallaron (createTeam, joinTeam,
+ *     myTeams, teamMembers) y que ninguna otra parte de `js/` hable con
+ *     Supabase por su cuenta;
+ *   · y se crea un equipo TAL COMO lo manda la aplicación (nombre y código,
+ *     sin `id` ni `owner_key`: los pone el servidor). El fallo se coló porque
+ *     se probó el camino cómodo —sembrar la fila con el ámbito ya puesto— y no
+ *     el real.
+ * ==================================================================== */
+
+describe('Cabeceras de Supabase: la regresión del apikey');
+
+const UUID_CABECERAS = 'aaaa1111-2222-4333-8444-555555555511';
+
+/** Valor de una cabecera grabada (el servidor no distingue mayúsculas). */
+function cabecera(peticion, nombre) {
+  return peticion.cabeceras ? peticion.cabeceras[String(nombre).toLowerCase()] : undefined;
+}
+
+/** Las peticiones grabadas que van a la API REST de Supabase. */
+function peticionesRest() {
+  return nube.llamadas.filter((p) => p.url.includes('/rest/v1/'));
+}
+
+/** Todos los `.js` de `js/`, recursivo: para la comprobación estática. */
+function archivosDeJS(dir = join(ROOT, 'js')) {
+  const salida = [];
+  for (const entrada of readdirSync(dir, { withFileTypes: true })) {
+    const ruta = join(dir, entrada.name);
+    if (entrada.isDirectory()) salida.push(...archivosDeJS(ruta));
+    else if (entrada.name.endsWith('.js')) salida.push(ruta);
+  }
+  return salida;
+}
+
+await itAsync('el Supabase falso rechaza una petición sin apikey como el servidor real', async () => {
+  nube.reset();
+  // Un `fetch` a mano y sin cabeceras: así es como sale una petición cuando no
+  // pasa por `authFetch`, que es lo que se cuela en la aplicación real. La
+  // respuesta tiene que ser la del servidor, no una inventada.
+  const respuesta = await nube.fetchImpl('https://proyecto.supabase.co/rest/v1/horus_teams', { method: 'GET' });
+  is(respuesta.ok, false, 'una petición sin apikey no puede salir bien');
+  is(respuesta.status, 401, 'el servidor contesta 401');
+  const cuerpo = JSON.parse(await respuesta.text());
+  is(cuerpo.message, 'No API key found in request', 'con el mensaje literal del servidor');
+  ok(String(cuerpo.hint).includes('apikey'), 'y la pista que dice qué falta');
+});
+
+await itAsync('toda petición de equipos a /rest/v1/ lleva apikey y, con sesión, Authorization', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+  nube.sembrarEquipo({ id: UUID_CABECERAS, name: 'Equipo de cabeceras', invite_code: 'CABEZAS1', owner_id: OTRO_USUARIO });
+
+  // Las cuatro funciones que fallaron, tal cual las usa la aplicación.
+  const creado = await teamsMod.createTeam('Equipo con cabeceras');
+  ok(creado.ok, `crear un equipo funciona (${creado.error || ''})`);
+  const entrada = await teamsMod.joinTeam('CABEZAS1');
+  ok(entrada.ok, `entrar con un código funciona (${entrada.error || ''})`);
+  const mios = await teamsMod.myTeams();
+  ok(mios.ok, `listar mis equipos funciona (${mios.error || ''})`);
+  const miembros = await teamsMod.teamMembers(UUID_CABECERAS);
+  ok(miembros.ok, `listar los miembros funciona (${miembros.error || ''})`);
+
+  // Y las de gestión (cambiar un rol, rotar el código y salir) salen por la
+  // misma puerta: si alguna se construyera aparte, se quedaría sin cabeceras.
+  // Las comprobaciones de abajo recorren TODAS las peticiones grabadas, así que
+  // estas tres quedan cubiertas sin repetir ni una aserción.
+  const propio = creado.equipo.id;
+  const cambioRol = await teamsMod.setMemberRole(propio, OTRO_USUARIO, 'admin');
+  ok(cambioRol.ok, `cambiar un rol funciona (${cambioRol.error || ''})`);
+  const rotado = await teamsMod.rotateInviteCode(propio);
+  ok(rotado.ok, `rotar el código funciona (${rotado.error || ''})`);
+  const salida = await teamsMod.leaveTeam(propio);
+  ok(salida.ok, `salir del equipo funciona (${salida.error || ''})`);
+
+  const rest = peticionesRest();
+  ok(rest.length >= 9, `se han grabado las peticiones de todas las funciones (${rest.length})`);
+  for (const peticion of rest) {
+    const apikey = cabecera(peticion, 'apikey');
+    ok(typeof apikey === 'string' && apikey.trim().length > 20,
+      `sin apikey en ${peticion.metodo} ${peticion.url}`);
+    ok(String(cabecera(peticion, 'authorization')).startsWith('Bearer '),
+      `sin Authorization en ${peticion.metodo} ${peticion.url}`);
+  }
+
+  // Y no vale con que «alguien» haya llamado: cada función tiene que haber
+  // pasado por ahí de verdad.
+  const listado = rest.map((p) => `${p.metodo} ${p.url}`).join('\n      ');
+  ok(rest.some((p) => p.metodo === 'POST' && p.url.endsWith('/horus_teams')),
+    `createTeam no escribió en horus_teams:\n      ${listado}`);
+  ok(rest.some((p) => p.metodo === 'POST' && p.url.includes('/rpc/horus_join_team')),
+    `joinTeam no llamó a la función del servidor:\n      ${listado}`);
+  ok(rest.some((p) => p.metodo === 'GET' && p.url.includes('horus_team_members?user_id=eq.')),
+    `myTeams no leyó las pertenencias:\n      ${listado}`);
+  ok(rest.some((p) => p.metodo === 'GET' && p.url.includes('horus_team_members?team_id=eq.')),
+    `teamMembers no leyó los miembros:\n      ${listado}`);
+});
+
+await itAsync('si la petición se queda sin apikey, el fallo del servidor se reproduce en las pruebas', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  // Se simula la regresión en el cable, no en el módulo: a todo lo que va a
+  // `/rest/v1/` se le quita el `apikey`. El refresco de token se contesta aquí
+  // porque no es lo que se está probando (y sin él, `authFetch` intentaría
+  // refrescar antes de devolver el 401).
+  const fetchSano = globalThis.fetch;
+  const tokenFalso = {
+    access_token: 'tok', refresh_token: 'ref', expires_in: 3600,
+    user: { id: USUARIO, email: 'ana@test' },
+  };
+  const respuestaToken = {
+    ok: true, status: 200, headers: { get: () => null },
+    json: async () => tokenFalso, text: async () => JSON.stringify(tokenFalso),
+  };
+  globalThis.fetch = async (url, opts = {}) => {
+    const destino = String(url);
+    if (destino.includes('/auth/v1/')) return respuestaToken;
+    const cabeceras = { ...(opts.headers || {}) };
+    for (const nombre of Object.keys(cabeceras)) {
+      if (nombre.toLowerCase() === 'apikey') delete cabeceras[nombre];
+    }
+    return fetchSano(destino, { ...opts, headers: cabeceras });
+  };
+
+  try {
+    const res = await teamsMod.createTeam('Equipo sin apikey');
+    is(res.ok, false, 'sin la cabecera no se puede crear el equipo');
+    ok(String(res.error).includes('No API key found in request'),
+      `y el error es el del servidor, no uno inventado (${res.error})`);
+  } finally {
+    globalThis.fetch = fetchSano;
+  }
+
+  // Con el cable sano vuelve a funcionar: lo que fallaba era la cabecera.
+  const sano = await teamsMod.createTeam('Equipo con cabeceras');
+  ok(sano.ok, `con el apikey puesto el equipo se crea (${sano.error || ''})`);
+});
+
+await itAsync('createTeam manda la fila como la manda la aplicación: nombre y código, sin id ni owner_key', async () => {
+  nube.reset();
+  env.reset();
+  sesionFalsa(true);
+
+  const res = await teamsMod.createTeam('Cuadrante de mañanas');
+  ok(res.ok, `el equipo se crea (${res.error || ''})`);
+
+  const alta = nube.llamadas.find((p) => p.metodo === 'POST' && p.url.endsWith('/horus_teams'));
+  ok(alta, 'hay una petición de alta en horus_teams');
+  const fila = Array.isArray(alta.cuerpo) ? alta.cuerpo[0] : alta.cuerpo;
+  is(Object.keys(fila).sort().join(','), 'invite_code,name,owner_id',
+    'la fila que manda el cliente: nombre, código y dueño… y nada más');
+  is(fila.owner_id, USUARIO, 'el dueño es quien la crea');
+  ok(/^[A-Z0-9]{8}$/.test(fila.invite_code), `el código lo genera el cliente (${fila.invite_code})`);
+  is('id' in fila, false, 'el id NO lo inventa el cliente: lo pone el servidor');
+  is('owner_key' in fila, false, 'y el ámbito tampoco: lo rellena el trigger del servidor');
+
+  // Y el servidor (el falso) ha hecho su parte: id propio y ámbito derivado.
+  const equipo = nube.equipos().find((t) => t.name === 'Cuadrante de mañanas');
+  ok(equipo, 'el equipo existe en el servidor');
+  is(equipo.owner_key, `team:${equipo.id}`, 'con el ámbito que le pone el servidor desde su id');
+  const pertenencia = nube.filaMiembro(equipo.id, USUARIO);
+  ok(pertenencia, 'y el creador dado de alta');
+  is(pertenencia.role, 'owner', 'como propietario');
+  is(pertenencia.owner_key, `team:${equipo.id}`, 'con el ámbito del equipo, no el personal');
+});
+
+it('ningún módulo habla con Supabase por su cuenta: todo pasa por authFetch', () => {
+  const problemas = [];
+  for (const ruta of archivosDeJS()) {
+    const fuente = readFileSync(ruta, 'utf8');
+    const corto = ruta.slice(ROOT.length + 1).split('\\').join('/');
+    // Quien construye rutas de la API REST tiene que hacerlo por la puerta de
+    // `auth.js`, que es la única que pone `apikey` y `Authorization`.
+    if (fuente.includes('/rest/v1/')) {
+      if (!fuente.includes('authFetch(')) problemas.push(`${corto}: usa /rest/v1/ sin pasar por authFetch`);
+      // `authFetch(` no cuenta: se busca un fetch() suelto de verdad.
+      if (/(^|[^A-Za-z_$])fetch\s*\(/.test(fuente)) problemas.push(`${corto}: llama a fetch() a mano`);
+    }
+  }
+  is(problemas.join('; '), '', 'módulos que podrían salir sin las cabeceras de la app');
+
+  // Y la cabecera se escribe en un único sitio: dos copias son dos verdades.
+  const conApiKey = archivosDeJS()
+    .filter((ruta) => /apikey\s*:/.test(readFileSync(ruta, 'utf8')))
+    .map((ruta) => ruta.slice(ROOT.length + 1).split('\\').join('/'));
+  is(conApiKey.join(','), 'js/core/auth.js', 'el único sitio que escribe la cabecera apikey');
 });
 
 /* ==================================================================== *

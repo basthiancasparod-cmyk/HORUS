@@ -228,6 +228,26 @@ function usuarioActual() {
   return sesion.userId;
 }
 
+/**
+ * La ÚNICA puerta de salida de este módulo hacia Supabase.
+ *
+ * POR QUÉ EXISTE — el fallo que evita, reportado desde la aplicación real:
+ * las cabeceras que Supabase exige (`apikey` SIEMPRE, y `Authorization: Bearer
+ * <token>` cuando hay sesión) no las pone este módulo. Las construye `auth.js`
+ * en `baseHeaders()` y las añade `authFetch()` a cada petición, exactamente
+ * igual que para `sync.js`. Y sin `apikey` no hay petición: el servidor la
+ * corta antes de mirar nada con «No API key found in request», así que
+ * `auth.uid()` nunca se rellena y RLS contesta un «new row violates row-level
+ * security policy» que no tiene nada que ver con la causa real. Por eso TODO lo
+ * que sale de aquí pasa por esta única función: quien añada una consulta nueva
+ * la escribe detrás de esta puerta y hereda las cabeceras sin poder olvidarse
+ * de ninguna, en vez de repetirlas a mano en cada sitio (una copia repetida es
+ * una copia que se queda atrás).
+ */
+async function api(ruta, opciones = {}) {
+  return authFetch(`/rest/v1/${ruta}`, opciones);
+}
+
 /** Mensaje de error de una respuesta de Supabase/PostgREST. */
 async function leerError(response) {
   try {
@@ -266,7 +286,7 @@ function falloDeRed(err) {
 async function pedir(path) {
   let response;
   try {
-    response = await authFetch(`/rest/v1/${path}`);
+    response = await api(path);
   } catch (err) {
     return falloDeRed(err);
   }
@@ -289,7 +309,7 @@ async function pedirUna(path) {
 async function insertar(tabla, fila) {
   let response;
   try {
-    response = await authFetch(`/rest/v1/${tabla}`, {
+    response = await api(tabla, {
       method: 'POST',
       headers: { Prefer: 'return=representation' },
       body: [fila],
@@ -309,7 +329,7 @@ async function insertar(tabla, fila) {
 async function actualizar(tabla, filtro, cambios) {
   let response;
   try {
-    response = await authFetch(`/rest/v1/${tabla}?${filtro}`, {
+    response = await api(`${tabla}?${filtro}`, {
       method: 'PATCH',
       headers: { Prefer: 'return=minimal' },
       body: cambios,
@@ -325,7 +345,7 @@ async function actualizar(tabla, filtro, cambios) {
 async function borrar(tabla, filtro) {
   let response;
   try {
-    response = await authFetch(`/rest/v1/${tabla}?${filtro}`, { method: 'DELETE' });
+    response = await api(`${tabla}?${filtro}`, { method: 'DELETE' });
   } catch (err) {
     return falloDeRed(err);
   }
@@ -480,7 +500,7 @@ export async function joinTeam(code) {
 
   let response;
   try {
-    response = await authFetch('/rest/v1/rpc/horus_join_team', {
+    response = await api('rpc/horus_join_team', {
       method: 'POST',
       body: { p_code: texto },
     });
