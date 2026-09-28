@@ -100,8 +100,21 @@
   flex-shrink: 0;
 }
 
+/* La fila de la cabecera se compone IGUAL en móvil que en escritorio.
+   OJO: esta regla estaba sólo dentro de la media query de escritorio, así que en
+   el móvil `.topbar-inner` se quedaba sin `display: flex`; al ser un div normal,
+   la marca, el título y los botones se apilaban en vertical dentro de una caja del
+   ancho del contenido. Eso era el «todo agrupado en una esquina». */
+.topbar-inner {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  gap: var(--sp-2);
+}
+
 @media (min-width: 900px) {
-  .topbar-inner { display: flex; align-items: center; width: 100%; gap: var(--sp-3); }
+  .topbar-inner { gap: var(--sp-3); }
 }
 
 /* ==========================================================================
@@ -1817,6 +1830,23 @@ a.btn { text-decoration: none; }
 
 /* Tamaño base de fuente y línea para legibilidad en móvil */
 @media (max-width: 599px) {
+  /* --- Cabecera de la aplicación --- */
+  /* El título de la sección ocupa lo que sobre y se recorta con puntos suspensivos
+     en vez de empujar los botones fuera de la pantalla. */
+  .topbar { padding: var(--sp-2) var(--sp-3); }
+  .topbar-title { min-width: 0; flex: 1 1 auto; }
+  .topbar-title h1,
+  .topbar-title .sub {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .topbar-title h1 { font-size: var(--fs-md); }
+  .topbar-title .sub { font-size: var(--fs-2xs); }
+  .topbar-actions { gap: 2px; }
+  .topbar-actions .icon-btn { width: 40px; height: 40px; }
+  .topbar-brand { padding-left: 0; }
+
   /* Área táctil mínima 44×44px para todo lo clicable */
   button, .btn, .list-item.is-clickable, .chip, .select,
   [role="button"], [role="tab"], [type="checkbox"], [type="radio"] {
@@ -1966,6 +1996,13 @@ a.btn { text-decoration: none; }
   .next-card { text-align: left; align-items: center; }
   .grid-3, .grid-2 { grid-template-columns: repeat(2, 1fr); }
   .dialog-panel { max-width: 520px; margin: auto; border-radius: var(--r-lg); }
+}
+
+/* Pantallas muy estrechas (320-399 px): el nombre de la app sobra —el sistema ya
+   lo pone debajo del icono— y se queda solo el logo, para que el título de la
+   sección tenga sitio de verdad. */
+@media (max-width: 399px) {
+  .topbar-brand .name { display: none; }
 }
 
 /* ==========================================================================

@@ -341,7 +341,6 @@ function paintMine(doc, ctx) {
           crossesMidnight(shift.labels) ? ' (cruza medianoche)' : '',
         ].join('')),
       ]),
-      el('span', { class: 't-xs t-muted t-nums' }, formatDuration(shift.endMs - shift.startMs)),
     ]);
     box.appendChild(row);
   }
