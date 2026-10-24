@@ -1,7 +1,12 @@
 /**
  * HORUS — js/ui/dialogs.js
  * Todos los diálogos de la aplicación: asignar un turno, editar un día, el
- * catálogo de turnos, las personas, las rotaciones y la exportación.
+ * formulario de un turno del catálogo, las personas, las rotaciones y la
+ * exportación.
+ *
+ * El CATÁLOGO de turnos (la lista, crear, archivar y eliminar) NO se gobierna
+ * desde aquí: vive en js/ui/shift-catalog.js, que es el contenido de la vista
+ * «Turnos». Este módulo solo presta el formulario (`openTypeEditor`).
  *
  * Cada función `open…` recibe un contexto mínimo ({ doc, actions }) y prepara
  * el formulario; el envío llama a las acciones del store. Así ninguna vista
@@ -85,7 +90,20 @@ export function wireAllDialogs() {
 let editingTypeId = null;
 let typeBlocksDraft = [];
 
-export function openTypeEditor(ctx, typeId = null, { onSaved = null } = {}) {
+/**
+ * Editor de un turno del catálogo.
+ *
+ * Aquí solo se CREA y se MODIFICA. El borrado lo decide quien abre el editor:
+ * el catálogo (js/ui/shift-catalog.js) sabe cuántos días del cuadrante usan el
+ * turno y ofrece archivar como salida segura, así que se le pasa `onDelete` y
+ * es él quien manda. Sin `onDelete` queda el aviso de siempre, que al menos dice
+ * la verdad: los días que lo usaban se quedan sin tipo.
+ *
+ * @param {object} ctx
+ * @param {string|null} typeId
+ * @param {{onSaved?:Function, onDelete?:(typeId:string)=>void}} [opts]
+ */
+export function openTypeEditor(ctx, typeId = null, { onSaved = null, onDelete = null } = {}) {
   if (bloqueadoPorRol(ctx)) return;
   const { actions } = ctx;
   const dialog = byId('dialog-type');
@@ -120,18 +138,25 @@ export function openTypeEditor(ctx, typeId = null, { onSaved = null } = {}) {
   const deleteBtn = byId('type-delete');
   deleteBtn.hidden = !type;
   deleteBtn.onclick = async () => {
+    if (!type) return;
+    // Quien abrió el editor puede hacerse cargo del borrado (es lo que hace la
+    // sección de Turnos: contar los días afectados y ofrecer archivar).
+    if (onDelete) { onDelete(type.id); return; }
+
     const used = ctx.doc.entries.filter((e) => e.typeId === type.id).length;
     const ok = await confirmAction({
       title: `¿Eliminar «${type.label}»?`,
       message: used
-        ? `Hay ${used} turno(s) en el cuadrante con este tipo. No se perderán: quedarán como turnos con su horario, pero sin tipo asociado.`
+        ? `El turno ${type.code} lo usan ${used === 1 ? '1 día' : `${used} días`} del cuadrante. Si lo borras, esos días se quedarán sin tipo.`
         : 'Se quitará del catálogo de turnos.',
-      confirmLabel: 'Eliminar',
+      confirmLabel: 'Eliminar de todas formas',
     });
     if (!ok) return;
     actions.removeShiftType(type.id);
     closeDialog(dialog);
-    notify.success(`«${type.label}» eliminado del catálogo`);
+    notify.success(`«${type.label}» eliminado del catálogo`, {
+      action: { label: 'Deshacer', onClick: () => ctx.undo?.() },
+    });
     onSaved?.();
   };
 
@@ -467,7 +492,10 @@ export function openAssignDialog(ctx, preset = {}) {
   const typeBox = byId('assign-types');
   const renderTypes = () => {
     clear(typeBox);
-    for (const type of ctx.doc.shiftTypes) {
+    // Los turnos archivados ya no se ofrecen (para eso se archivan: quitar del
+    // selector sin destruir el histórico). El que YA está elegido sí se muestra:
+    // esconderlo dejaría al usuario sin ver qué tiene puesto ese día.
+    for (const type of ctx.doc.shiftTypes.filter((t) => !t.archived || t.id === assignState.typeId)) {
       const chip = el('button', {
         type: 'button',
         class: 'chip',
@@ -820,9 +848,9 @@ function renderEntryRow(ctx, projection, refresh) {
   ]);
   row.appendChild(header);
 
-  // Selector rápido de tipo
+  // Selector rápido de tipo (sin los archivados, salvo el que ya está puesto)
   const chipRow = el('div', { class: 'chip-row', style: { marginTop: 'var(--sp-3)' } });
-  for (const t of ctx.doc.shiftTypes) {
+  for (const t of ctx.doc.shiftTypes.filter((x) => !x.archived || x.id === entry.typeId)) {
     chipRow.appendChild(el('button', {
       type: 'button',
       class: 'chip',
@@ -1046,7 +1074,9 @@ export function openPatternDialog(ctx, { memberId = null, mode = 'pattern' } = {
   ]);
   fillSelect(byId('pattern-add-type'), [
     { value: '', label: 'Añadir turno al ciclo…' },
-    ...ctx.doc.shiftTypes.map((t) => ({ value: t.id, label: `${t.code} · ${t.label}` })),
+    // Un turno archivado no se ofrece para ciclos nuevos; los que ya estén en
+    // una rotación guardada se siguen pintando desde `patternCycle`.
+    ...ctx.doc.shiftTypes.filter((t) => !t.archived).map((t) => ({ value: t.id, label: `${t.code} · ${t.label}` })),
     { value: '__none__', label: '— Libre (sin turno) —' },
   ]);
 

@@ -1,7 +1,7 @@
 /**
  * HORUS — tests/smoke.mjs
  * Prueba de humo de la interfaz: monta el index.html real en un DOM mínimo y
- * ejecuta `mount()` y `render()` de las seis vistas con varios estados del
+ * ejecuta `mount()` y `render()` de las siete vistas con varios estados del
  * documento (vacío, un día, un mes completo, un año, datos corruptos).
  *
  * Esto es lo que las pruebas unitarias no pueden cubrir: que las vistas se
@@ -113,9 +113,48 @@ it('el index.html real se ha cargado y tiene las secciones esperadas', () => {
   for (const id of ['app', 'boot', 'auth-screen', 'wizard-screen', 'nav', 'main', 'toasts']) {
     ok(env.document.getElementById(id), `falta #${id}`);
   }
-  for (const view of ['today', 'calendar', 'roster', 'team', 'hours', 'settings']) {
+  for (const view of ['today', 'calendar', 'roster', 'shifts', 'team', 'hours', 'settings']) {
     ok(env.document.getElementById(`view-${view}`), `falta #view-${view}`);
   }
+});
+
+it('la navegación tiene un botón por vista, con nombre largo y corto', () => {
+  const botones = [...env.document.getElementById('nav').querySelectorAll('.nav-item[data-view]')];
+  is(botones.length, 7, 'siete apartados en la navegación');
+  for (const boton of botones) {
+    const view = boton.dataset.view;
+    ok(env.document.getElementById(`view-${view}`), `el botón de ${view} apunta a una vista que existe`);
+    ok(boton.getAttribute('aria-label'), `${view} tiene nombre para lectores de pantalla`);
+    // En el móvil la etiqueta larga se cambia por la corta (CSS con attr()):
+    // sin ella, el botón se quedaría sin texto visible.
+    ok(boton.dataset.shortLabel, `${view} tiene etiqueta corta para el móvil`);
+  }
+});
+
+it('la barra del móvil deja cuatro apartados fijos y un «Más» con los demás', () => {
+  const nav = env.document.getElementById('nav');
+
+  // El reparto: cuatro fijos (los que se tocan a diario) y tres dentro de «Más».
+  const fijos = [...nav.querySelectorAll('.nav-item[data-view]')]
+    .filter((b) => !b.hasAttribute('data-extra'))
+    .map((b) => b.dataset.view);
+  is(fijos.join(','), 'today,roster,team,settings', 'cuatro fijos: Inicio, Cuadrante, Equipo y Ajustes');
+
+  const extras = [...nav.querySelectorAll('.nav-item[data-extra]')].map((b) => b.dataset.view).sort();
+  is(extras.join(','), 'calendar,hours,shifts', 'los otros tres van dentro de «Más»');
+
+  const mas = env.document.getElementById('nav-more');
+  ok(mas, 'existe el botón «Más»');
+  is(mas.getAttribute('aria-haspopup'), 'true', 'declara que despliega algo');
+  is(mas.getAttribute('aria-expanded'), 'false', 'y empieza cerrado');
+  is(mas.getAttribute('aria-controls'), 'nav-more-panel', 'apuntando a su panel');
+
+  const panel = env.document.getElementById('nav-more-panel');
+  ok(panel, 'existe el panel del desplegable');
+  is(panel.getAttribute('role'), 'menu', 'con papel de menú');
+  is(panel.hidden, true, 'y empieza oculto');
+  const opciones = [...panel.querySelectorAll('[data-view]')].map((b) => b.dataset.view).sort();
+  is(opciones.join(','), extras.join(','), 'dentro están los tres que no caben en la barra');
 });
 
 it('el parser ha construido el árbol con los diálogos', () => {
@@ -156,6 +195,7 @@ const dialogs = await import('../js/ui/dialogs.js');
 const todayView = await import('../js/ui/views/today.js');
 const calendarView = await import('../js/ui/views/calendar.js');
 const rosterView = await import('../js/ui/views/roster.js');
+const shiftsView = await import('../js/ui/views/shifts.js');
 const teamView = await import('../js/ui/views/team.js');
 const hoursView = await import('../js/ui/views/hours.js');
 const settingsView = await import('../js/ui/views/settings.js');
@@ -164,6 +204,7 @@ const VIEWS = [
   ['today', todayView],
   ['calendar', calendarView],
   ['roster', rosterView],
+  ['shifts', shiftsView],
   ['team', teamView],
   ['hours', hoursView],
   ['settings', settingsView],
@@ -975,6 +1016,207 @@ it('el editor de día se abre y guarda la marca y las notas', () => {
   is(dialog.open, false, 'se cerró');
 });
 
+/* ==================================================================== *
+ * 7 bis. Vista de turnos
+ *
+ * El catálogo tiene dueño propio (js/ui/shift-catalog.js) y sitio propio: una
+ * vista en la navegación. Se crea, se modifica, se archiva y se borra ahí, no
+ * dentro del Cuadrante ni escondido en Ajustes.
+ * ==================================================================== */
+
+describe('Vista de turnos');
+
+/** Monta las vistas y deja «Turnos» pintada, que es donde vive el catálogo. */
+function abrirTurnos(doc = fullDoc()) {
+  const store = storeMod.createStore(doc);
+  const ctx = mountAll(store);
+  contextMod.setCurrentView('shifts');
+  contextMod.renderCurrent();
+  return { store, ctx };
+}
+
+const listaDeTurnos = () => env.document.getElementById('shift-catalog-list');
+const filasDeTurnos = () => [...listaDeTurnos().querySelectorAll('.type-card')];
+const filaDe = (typeId) => listaDeTurnos().querySelector(`[data-type-id="${typeId}"]`);
+
+it('la vista lista todos los turnos con su horario a la vista', () => {
+  const { store } = abrirTurnos(fullDoc());
+  const filas = filasDeTurnos();
+  is(filas.length, store.doc.shiftTypes.length, 'hay una fila por turno del catálogo');
+
+  for (const type of store.doc.shiftTypes) {
+    const fila = filaDe(type.id);
+    ok(fila, `existe la fila del turno ${type.code}`);
+    ok(fila.textContent.includes(type.code), `la fila de ${type.code} enseña el código`);
+    ok(fila.textContent.includes(type.label), `y el nombre (${type.label})`);
+    // El horario se ve SIN abrir nada: es la mitad de lo que pedía el usuario.
+    const esperado = type.blocks.length ? dateMod.formatBlocks(type.blocks) : 'sin horario';
+    ok(fila.textContent.includes(esperado), `y el horario legible «${esperado}»`);
+  }
+
+  const manana = filaDe(store.doc.shiftTypes.find((t) => t.code === 'M').id);
+  ok(manana.textContent.includes('8:30–17:00'), 'la mañana enseña sus horas');
+  is(manana.getAttribute('data-counts-hours'), 'true', 'y dice que cuenta horas');
+  is(manana.getAttribute('data-archived'), 'false', 'y que no está archivado');
+
+  const partido = filaDe(store.doc.shiftTypes.find((t) => t.code === 'P').id);
+  ok(partido.textContent.includes('8:30–13:00 · 17:00–21:00'), 'los turnos partidos enseñan sus dos tramos');
+
+  const libre = filaDe(store.doc.shiftTypes.find((t) => t.code === 'L').id);
+  ok(libre.textContent.includes('No cuenta horas'), 'y se ve cuáles no cuentan horas');
+  ok(libre.textContent.includes('hacen falta 1'), 'la demanda también se ve');
+});
+
+await itAsync('añadir un turno desde la vista funciona y aparece luego en el Cuadrante', async () => {
+  const { store } = abrirTurnos(oneDayDoc());
+  const antes = store.doc.shiftTypes.length;
+
+  env.document.getElementById('shift-catalog-add').click();
+  ok(env.document.getElementById('dialog-type').open, 'se abre el formulario de siempre');
+  env.document.getElementById('type-code').value = 'R2';
+  env.document.getElementById('type-label').value = 'Refuerzo de tarde';
+  env.document.getElementById('type-demand').value = '2';
+  env.document.getElementById('form-type').requestSubmit();
+  await sleep(10);
+
+  is(store.doc.shiftTypes.length, antes + 1, 'el turno nuevo entra en el catálogo');
+  const nuevo = store.doc.shiftTypes.find((t) => t.code === 'R2');
+  ok(nuevo, 'con el código pedido');
+  is(nuevo.demand, 2, 'y su demanda');
+  ok(filaDe(nuevo.id), 'y aparece en la vista sin recargar nada');
+
+  // «Aparece luego en el Cuadrante»: su leyenda y el selector de asignar lo ven.
+  contextMod.setCurrentView('roster');
+  contextMod.renderCurrent();
+  ok(env.document.getElementById('roster-legend').textContent.includes('R2'), 'el Cuadrante ya lo conoce');
+
+  dialogs.openAssignDialog(contextMod.getContext(), { date: '2025-06-05' });
+  ok(env.document.getElementById('assign-types').textContent.includes('Refuerzo de tarde'),
+    'y se puede asignar a una persona');
+  env.document.getElementById('dialog-assign').close();
+});
+
+await itAsync('editar el horario desde la vista lo cambia de verdad', async () => {
+  const { store } = abrirTurnos(fullDoc());
+  const manana = store.doc.shiftTypes.find((t) => t.code === 'M');
+
+  filaDe(manana.id).querySelector('[data-action="editar"]').click();
+  ok(env.document.getElementById('dialog-type').open, 'se abre el editor de ese turno');
+  is(env.document.getElementById('type-code').value, 'M', 'con el turno correcto cargado');
+
+  const horas = env.document.getElementById('type-blocks').querySelectorAll('input[type="time"]');
+  is(horas.length, 2, 'el editor tiene inicio y fin');
+  horas[0].value = '07:00';
+  horas[0].dispatchEvent(new env.DOMEvent('input', { bubbles: true }));
+  horas[1].value = '15:00';
+  horas[1].dispatchEvent(new env.DOMEvent('input', { bubbles: true }));
+  env.document.getElementById('form-type').requestSubmit();
+  await sleep(10);
+
+  const despues = store.doc.shiftTypes.find((t) => t.id === manana.id);
+  is(despues.blocks[0].start, '07:00', 'la hora de inicio cambia en el catálogo');
+  is(despues.blocks[0].end, '15:00', 'y la de fin');
+  renderAll();
+  ok(filaDe(manana.id).textContent.includes('7:00–15:00'), 'y la vista enseña el horario nuevo');
+});
+
+it('un horario que cruza medianoche se avisa en la vista y en el formulario', () => {
+  const { store } = abrirTurnos(fullDoc());
+  const tarde = store.doc.shiftTypes.find((t) => t.code === 'T');
+
+  const fila = filaDe(tarde.id);
+  ok(fila.textContent.includes('cruza medianoche'), 'la vista lo dice sin abrir el editor');
+  ok(fila.textContent.includes('termina a las 0:45 del día siguiente'), 'diciendo a qué hora termina');
+
+  fila.querySelector('[data-action="editar"]').click();
+  const pista = env.document.getElementById('type-blocks').textContent;
+  ok(pista.includes('cruza medianoche'), 'y el formulario también lo advierte');
+  env.document.getElementById('dialog-type').close();
+});
+
+await itAsync('archivar avisa, no destruye nada y quita el turno de los selectores', async () => {
+  const { store } = abrirTurnos(fullDoc());
+  const manana = store.doc.shiftTypes.find((t) => t.code === 'M');
+  const usos = store.doc.entries.filter((e) => e.typeId === manana.id).length;
+  ok(usos > 0, `hacen falta días que usen el turno para la prueba (${usos})`);
+
+  filaDe(manana.id).querySelector('[data-action="eliminar"]').click();
+  await sleep(10);
+
+  const confirmacion = env.document.getElementById('dialog-confirm');
+  ok(confirmacion.open, 'borrar pide confirmación: nunca se borra en silencio');
+  const texto = confirmacion.textContent;
+  ok(texto.includes(`lo usan ${usos} días del cuadrante`), `dice cuántos días se ven afectados (${usos})`);
+  ok(texto.includes('se quedarán sin tipo'), 'y qué les pasa a esos días');
+  ok(/[Aa]rchivar/.test(texto), 'y ofrece archivar como opción segura');
+
+  // La salida recomendada, desde la propia confirmación.
+  const archivar = [...confirmacion.querySelectorAll('button')].find((b) => /Archivar/.test(b.textContent));
+  ok(archivar, 'existe el botón de archivar en su lugar');
+  archivar.click();
+  await sleep(10);
+
+  const despues = store.doc.shiftTypes.find((t) => t.id === manana.id);
+  ok(despues, 'el turno sigue en el catálogo');
+  is(despues.archived, true, 'queda archivado');
+  is(store.doc.entries.filter((e) => e.typeId === manana.id).length, usos,
+    'y ningún día del cuadrante se ha tocado');
+  is(filaDe(manana.id).getAttribute('data-archived'), 'true', 'la vista lo marca como archivado');
+
+  dialogs.openAssignDialog(contextMod.getContext(), { date: '2025-06-05' });
+  ok(!env.document.getElementById('assign-types').textContent.includes(manana.label),
+    'archivado: ya no se ofrece al asignar turnos');
+  env.document.getElementById('dialog-assign').close();
+});
+
+await itAsync('el borrado definitivo avisa, deja los días sin tipo y se deshace de una vez', async () => {
+  const { store } = abrirTurnos(fullDoc());
+  const manana = store.doc.shiftTypes.find((t) => t.code === 'M');
+  const usos = store.doc.entries.filter((e) => e.typeId === manana.id).length;
+  const antes = store.doc.shiftTypes.length;
+
+  filaDe(manana.id).querySelector('[data-action="eliminar"]').click();
+  await sleep(10);
+  env.document.getElementById('confirm-ok').click();
+  await sleep(10);
+
+  is(store.doc.shiftTypes.length, antes - 1, 'el turno sale del catálogo');
+  const huerfanos = store.doc.entries.filter((e) => e.date && e.typeId === manana.id);
+  is(huerfanos.length, 0, 'ningún día conserva ese tipo');
+  const afectados = store.doc.entries.filter((e) => e.typeId === null && e.date && e.blocks?.length);
+  ok(afectados.length >= usos, `los días se quedan sin tipo pero conservan su horario (${afectados.length})`);
+  ok(!filaDe(manana.id), 'y la fila desaparece de la vista');
+
+  // Un solo paso de deshacer devuelve el turno y sus días.
+  store.undo();
+  is(store.doc.shiftTypes.length, antes, 'deshacer devuelve el turno al catálogo');
+  is(store.doc.entries.filter((e) => e.typeId === manana.id).length, usos, 'y los días recuperan su tipo');
+});
+
+it('el Cuadrante ya no abre el editor de turnos: lleva a la vista Turnos', () => {
+  abrirTurnos(fullDoc());
+  contextMod.setCurrentView('roster');
+  contextMod.renderCurrent();
+
+  const leyenda = env.document.getElementById('roster-legend');
+  const boton = [...leyenda.querySelectorAll('button')].find((b) => b.textContent.includes('Mañana'));
+  ok(boton, 'la leyenda del cuadrante enseña los turnos');
+  boton.click();
+
+  is(env.document.getElementById('dialog-type').open, false, 'no se abre ningún editor dentro de la rejilla');
+  is(contextMod.getCurrentView(), 'shifts', 'y lleva a la vista Turnos, que es donde se toca el catálogo');
+});
+
+it('solo la vista de Turnos abre el editor de un turno', () => {
+  // Comprobación estática: si vuelve a aparecer la llamada en otra vista, esta
+  // prueba lo dice con el archivo y todo. Es la puerta que se quería cerrar.
+  const culpables = archivosDeJS()
+    .filter((ruta) => /openTypeEditor\s*\(/.test(readFileSync(ruta, 'utf8')))
+    .map((ruta) => ruta.replace(/\\/g, '/'))
+    .filter((ruta) => !/js\/ui\/(dialogs|shift-catalog)\.js$/.test(ruta));
+  is(culpables.join(', '), '', 'ningún otro archivo llama a openTypeEditor');
+});
+
 /* ------------------------------------------------------------------ *
  * Fichas duplicadas
  * ------------------------------------------------------------------ */
@@ -1311,8 +1553,8 @@ it('las pestañas de acceso cambian de modo', () => {
 });
 
 it('los botones de la barra inferior existen y son pulsables', () => {
-  const buttons = env.document.getElementById('nav').querySelectorAll('.nav-item');
-  is(buttons.length, 6, 'hay seis secciones');
+  const buttons = env.document.getElementById('nav').querySelectorAll('.nav-item[data-view]');
+  is(buttons.length, 7, 'hay siete secciones');
   for (const button of buttons) {
     ok(button.dataset.view, 'cada botón declara su vista');
     button.click();
@@ -1748,6 +1990,14 @@ async function montarEnAjustes(store, espera = 60) {
   await sleep(espera);
 }
 
+/** Monta las vistas, deja Equipo en pantalla y espera a la consulta del rol. */
+async function montarEnEquipo(store, espera = 60) {
+  mountAll(store);
+  contextMod.setCurrentView('team');
+  contextMod.renderCurrent();
+  await sleep(espera);
+}
+
 /**
  * Cierra los diálogos que hayan quedado abiertos de pruebas anteriores.
  * Se busca por etiqueta y se mira la propiedad `open`: en el DOM de pruebas el
@@ -1759,23 +2009,23 @@ function cerrarDialogos() {
   }
 }
 
-await itAsync('crear un equipo desde Ajustes deja el documento en ámbito de equipo', async () => {
+await itAsync('crear un equipo desde Equipo deja el documento en ámbito de equipo', async () => {
   nube.reset();
   env.reset();
   sesionFalsa(true);
   const store = storeMod.createStore(oneDayDoc());
-  await montarEnAjustes(store);
+  await montarEnEquipo(store);
 
   is(store.doc.teamId, null, 'se empieza en modo personal');
-  env.document.getElementById('settings-team-create').click();
+  env.document.getElementById('team-create').click();
   ok(env.document.getElementById('dialog-confirm').open, 'se abre el diálogo de creación');
   const mensaje = env.document.getElementById('confirm-message').textContent;
   ok(mensaje.includes('pasará a ser el del equipo'), 'el aviso del cuadrante está por escrito');
   ok(mensaje.includes('cuadrante personal seguirá guardado'), 'y dice que el personal no se pierde');
 
-  env.document.getElementById('settings-team-name').value = 'Cuadrante de mañanas';
+  env.document.getElementById('team-create-name').value = 'Cuadrante de mañanas';
   env.document.getElementById('confirm-ok').click();
-  await sleep(80);
+  await sleep(200); // tiempo suficiente para que complete createTeam + changeScope
 
   const equipo = nube.equipos()[0];
   ok(equipo, 'el equipo se ha creado en el servidor');
@@ -1833,13 +2083,12 @@ await itAsync('sin sesión avisa en vez de romperse', async () => {
   env.reset();
   sesionFalsa(false);
   const store = storeMod.createStore(oneDayDoc());
-  await montarEnAjustes(store, 10);
+  await montarEnEquipo(store, 10);
 
-  ok(env.document.getElementById('settings-team-card').textContent.includes('Inicia sesión'),
-    'la tarjeta explica que hace falta una cuenta');
-
+  // En la vista Equipo sin sesión se puede ver el estado vacío local (no exige cuenta).
+  // Lo que se prueba es que el botón "Crear equipo" avisa correctamente.
   const antes = nube.llamadas.length;
-  env.document.getElementById('settings-team-create').click();
+  env.document.getElementById('team-create').click();
   await sleep(20);
   is(env.document.getElementById('dialog-confirm').open, false, 'no se abre ningún diálogo');
   is(store.doc.teamId, null, 'el ámbito no cambia');
@@ -1880,8 +2129,14 @@ await itAsync('con rol viewer la app entra en solo lectura: aviso visible y acci
     is(env.document.getElementById(id).disabled, true, `${id} queda desactivado`);
   }
   is(env.document.getElementById('team-add').disabled, true, 'añadir persona, desactivado');
-  for (const id of ['settings-shift-types', 'settings-clear-schedule', 'settings-import-pdf', 'settings-import-csv']) {
+  for (const id of ['shift-catalog-add', 'settings-clear-schedule', 'settings-import-pdf', 'settings-import-csv']) {
     is(env.document.getElementById(id).disabled, true, `${id} queda desactivado`);
+  }
+  // Y las acciones de cada fila del catálogo de turnos, también.
+  for (const action of ['editar', 'archivar', 'eliminar']) {
+    const boton = listaDeTurnos().querySelector(`[data-action="${action}"]`);
+    ok(boton, `existe la acción ${action}`);
+    is(boton.disabled, true, `la acción ${action} del catálogo queda desactivada`);
   }
 
   // 3) Lo que NO escribe sigue disponible: quitarlo también sería mentir.
@@ -1921,7 +2176,7 @@ await itAsync('con rol owner o admin se puede editar', async () => {
     is(env.document.getElementById('roster-import').disabled, false, `importar disponible con ${rol}`);
     is(env.document.getElementById('roster-rotate').disabled, false, `rotar disponible con ${rol}`);
     is(env.document.getElementById('team-add').disabled, false, `añadir persona con ${rol}`);
-    is(env.document.getElementById('settings-shift-types').disabled, false, `catálogo con ${rol}`);
+    is(env.document.getElementById('shift-catalog-add').disabled, false, `catálogo con ${rol}`);
     is(env.document.getElementById('settings-clear-schedule').disabled, false, `borrar turnos con ${rol}`);
 
     const celda = env.document.querySelector('#roster-body td.shift-cell');

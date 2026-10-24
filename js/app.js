@@ -12,7 +12,7 @@
 
 import { byId, $$, $, el, icon, debounce, prefersReducedMotion } from './core/utils.js';
 import {
-  todayKey, addDays, monthKeyOf, formatLongDate, stamp,
+  todayKey, addDays, monthKeyOf, stamp,
 } from './core/date.js';
 import {
   normalizeDocument, migrateFromLegacy, bootstrapDocument,
@@ -31,12 +31,13 @@ import {
   setFocusDate, getFocusDate, registerRenderer, invalidate, renderCurrent,
 } from './ui/context.js';
 import { notify, openDialog, closeDialog, confirmAction, switchControl, emptyState } from './ui/toolkit.js';
-import { wireAllDialogs, openAssignDialog, openDayEditor, openMemberEditor, openTypeEditor, openExportDialog, fillRegionSelect, applyHolidays } from './ui/dialogs.js';
+import { wireAllDialogs, openAssignDialog, openDayEditor, openMemberEditor, openExportDialog, fillRegionSelect, applyHolidays } from './ui/dialogs.js';
 import { openImportDialog } from './ui/import-review.js';
 
 import { mount as mountToday } from './ui/views/today.js';
 import { mount as mountCalendar } from './ui/views/calendar.js';
 import { mount as mountRoster } from './ui/views/roster.js';
+import { mount as mountShifts, focusShift } from './ui/views/shifts.js';
 import { mount as mountTeam } from './ui/views/team.js';
 import { mount as mountHours } from './ui/views/hours.js';
 import { mount as mountSettings } from './ui/views/settings.js';
@@ -47,6 +48,11 @@ import { mount as mountSettings } from './ui/views/settings.js';
 
 const THEME_KEY = 'horus.theme';
 const REGION_KEY = 'horus.region';
+/** Último equipo usado en este dispositivo. */
+const TEAM_KEY = 'horus.team.last';
+const TEAM_NAME_KEY = 'horus.team.name';
+/** Cada cuánto se pregunta a la nube si hay cambios de otros miembros. */
+const BACKGROUND_SYNC_MS = 30000;
 
 let store = null;
 let sync = null;
@@ -55,7 +61,9 @@ let uiState = null;
 let localMode = false;
 let clockTimer = null;
 let syncPendingTimer = null;
+let backgroundSyncTimer = null;
 let mediaTheme = null;
+let workspaceInfo = { id: null, name: '' };
 
 const mounted = new Set();
 
@@ -105,9 +113,10 @@ function onSystemThemeChange() {
  * ==================================================================== */
 
 const VIEW_SUBTITLES = {
-  today: () => formatLongDate(getFocusDate() || todayKey()),
+  today: () => 'Tu equipo, de un vistazo',
   calendar: () => `Semana ${isoWeekOf(getFocusDate() || todayKey())}`,
   roster: () => 'Todas las personas y todos los días',
+  shifts: () => `${store.doc.shiftTypes.filter((t) => !t.archived).length} turnos en el catálogo`,
   team: () => `${store.doc.members.filter((m) => m.active).length} personas en el equipo`,
   hours: () => 'Control de horas y objetivos',
   settings: () => `${APP.name} ${APP.version}`,
@@ -134,6 +143,8 @@ function paintHeader() {
   // contexto del documento.
   const brand = $('.topbar-brand .name');
   if (brand && window.innerWidth >= 900) brand.textContent = store.doc.name || 'HORUS';
+
+  paintWorkspace();
 }
 
 /* ==================================================================== *
@@ -157,11 +168,159 @@ function navigate(view, { focus = false } = {}) {
   }
 
   paintHeader();
+  // El desplegable de «Más» no puede quedarse abierto tapando la vista nueva,
+  // y su botón tiene que reflejar dónde está el usuario (puede ser una de las
+  // secciones que viven dentro).
+  cerrarNavMore();
+  paintNavMore();
+
   // Se repinta al entrar: puede que el estado haya cambiado mientras estaba
   // oculta (el repintado solo se ejecuta para la vista visible).
   const renderer = mounted.has(view);
   if (renderer) renderCurrent();
   if (focus) byId('main')?.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+}
+
+/* ==================================================================== *
+ * «Más»: el desplegable de la barra del móvil
+ *
+ * La barra inferior lleva cuatro apartados fijos (Inicio, Cuadrante, Equipo y
+ * Ajustes) y un quinto botón con los que no caben: a 320 px, siete seguidos
+ * dejarían cada uno por debajo del área de toque mínima de la app. En escritorio
+ * el menú lateral enseña solo los cuatro fijos; los demás están en Ajustes →
+ * General → Herramientas. Este código no mira el ancho: solo abre y cierra.
+ * ==================================================================== */
+
+/** Apartados que, en el móvil, viven dentro de «Más». */
+const VISTAS_EN_MAS = ['calendar', 'hours', 'shifts'];
+
+/** ¿Está abierto el desplegable? */
+function navMoreAbierto() {
+  const panel = byId('nav-more-panel');
+  return !!panel && !panel.hidden;
+}
+
+/**
+ * Cierra el desplegable. No mueve el foco a propósito: quién lo cierra decide
+ * si el foco vuelve al botón (Escape, elegir una opción) o se queda donde el
+ * usuario haya pulsado (un clic fuera).
+ */
+function cerrarNavMore() {
+  const panel = byId('nav-more-panel');
+  const toggle = byId('nav-more');
+  if (!panel || panel.hidden) return false;
+  panel.hidden = true;
+  toggle?.setAttribute('aria-expanded', 'false');
+  return true;
+}
+
+/** Abre el desplegable y mete el foco dentro (en la sección actual, si está). */
+function abrirNavMore() {
+  const panel = byId('nav-more-panel');
+  const toggle = byId('nav-more');
+  if (!panel || panel.hidden === false) return;
+  panel.hidden = false;
+  toggle?.setAttribute('aria-expanded', 'true');
+  const actual = panel.querySelector('[aria-current="page"]') || panel.querySelector('[data-view]');
+  actual?.focus?.();
+}
+
+/**
+ * Marca dónde está el usuario cuando la vista abierta vive dentro de «Más».
+ *
+ * Sin esto, al estar en Turnos, Horas o Ajustes la barra no enseñaría ningún
+ * apartado activo y parecería que no estás en ningún sitio. El botón cambia su
+ * etiqueta corta por el nombre de la sección; el icono de puntos suspensivos
+ * sigue diciendo que despliega.
+ */
+function paintNavMore() {
+  const toggle = byId('nav-more');
+  if (!toggle) return;
+  const view = getCurrentView();
+  const dentro = VISTAS_EN_MAS.includes(view);
+  const titulo = dentro ? (VIEW_TITLES[view] || 'Más') : 'Más';
+
+  if (dentro) toggle.setAttribute('aria-current', 'page');
+  else toggle.removeAttribute('aria-current');
+  toggle.dataset.shortLabel = titulo;
+  const label = toggle.querySelector('.nav-label');
+  if (label) label.textContent = titulo;
+
+  for (const item of $$('#nav-more-panel [data-view]')) {
+    if (item.dataset.view === view) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  }
+}
+
+/** Cablea el botón «Más» y su panel (una sola vez, al arrancar). */
+function wireNavMore() {
+  const panel = byId('nav-more-panel');
+  const toggle = byId('nav-more');
+  if (!panel || !toggle) return;
+
+  toggle.addEventListener('click', () => {
+    if (navMoreAbierto()) {
+      cerrarNavMore();
+      toggle.focus();
+    } else {
+      abrirNavMore();
+    }
+  });
+
+  // Con las flechas también se abre, como un menú de verdad.
+  toggle.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      event.preventDefault();
+      abrirNavMore();
+    }
+  });
+
+  panel.addEventListener('click', (event) => {
+    const item = event.target.closest?.('[data-view]');
+    if (!item) return;
+    // `navigate()` cierra el panel; después el foco vuelve al botón, que sigue
+    // a la vista (si no, se quedaría en una opción que acaba de desaparecer).
+    navigate(item.dataset.view, { focus: true });
+    byId('nav-more')?.focus();
+  });
+
+  panel.addEventListener('keydown', (event) => {
+    const items = $$('#nav-more-panel [data-view]');
+    const index = items.indexOf(document.activeElement);
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cerrarNavMore();
+      toggle.focus();
+    } else if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      items[(index + 1) % items.length]?.focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      items[(index - 1 + items.length) % items.length]?.focus();
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === 'End') {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    } else if (event.key === 'Tab') {
+      // Tabular sale del menú: se cierra sin robarle el paso al foco.
+      cerrarNavMore();
+    }
+  });
+
+  // Un clic fuera cierra.
+  document.addEventListener('click', (event) => {
+    if (!navMoreAbierto()) return;
+    if (event.target.closest?.('#nav-more-panel') || event.target.closest?.('#nav-more')) return;
+    cerrarNavMore();
+  });
+
+  // Al pasar a escritorio el desplegable desaparece: se cierra para no dejarlo
+  // «abierto» (y con aria-expanded=true) sobre un panel que ya no se ve.
+  window.matchMedia?.('(min-width: 900px)')?.addEventListener?.('change', (event) => {
+    if (event.matches) cerrarNavMore();
+  });
 }
 
 /* ==================================================================== *
@@ -236,6 +395,127 @@ function paintConnectivity() {
 }
 
 /* ==================================================================== *
+ * Espacio de trabajo
+ *
+ * La aplicación puede estar en el cuadrante personal o en el de un equipo.
+ * Hasta ahora eso solo se veía en Ajustes → Equipo, así que era fácil estar
+ * mirando el cuadrante equivocado y concluir que «no se sincroniza». El
+ * indicador de la cabecera lo dice siempre, y al pulsarlo se abre la pestaña
+ * del equipo.
+ * ==================================================================== */
+
+function paintWorkspace() {
+  const pill = byId('workspace-pill');
+  if (!pill) return;
+  const nameNode = byId('workspace-name');
+  const teamId = store?.doc?.teamId || null;
+  const storedName = storage.storage.get(TEAM_NAME_KEY);
+  const name = teamId
+    ? (workspaceInfo.id === teamId && workspaceInfo.name
+      ? workspaceInfo.name
+      : (storedName || 'Equipo'))
+    : 'Personal';
+  if (nameNode) nameNode.textContent = name;
+  pill.dataset.scope = teamId ? 'team' : 'personal';
+  pill.setAttribute('aria-label', teamId
+    ? `Equipo ${name}. Pulsa para cambiar de equipo o salir.`
+    : 'Cuadrante personal. Pulsa para iniciar sesión o entrar en un equipo.');
+  pill.title = teamId
+    ? `Estás en el equipo «${name}». Pulsa para cambiar de equipo o salir.`
+    : 'Estás en tu cuadrante personal. Inicia sesión para compartirlo con tu equipo.';
+}
+
+/**
+ * Si la cuenta pertenece a un equipo, entra en él automáticamente.
+ *
+ * El `teamId` vive en el documento local, no en la cuenta: una PC que nunca
+ * había abierto el equipo se quedaba en el ámbito personal y no veía nada de lo
+ * que se subía desde el móvil. Aquí se pregunta al servidor a qué equipos
+ * pertenece la cuenta y se adopta el último usado (o el único que haya).
+ *
+ * El primer cambio de ámbito usa `pull({ replace: true })`: el cuadrante
+ * personal que hubiera en esta PC no se sube al equipo. Antes de reemplazar se
+ * guarda una copia local en las copias rotativas, así que no se pierde.
+ *
+ * @returns {Promise<boolean>} true si el documento quedó en un equipo
+ */
+async function adoptTeamWorkspace() {
+  if (!auth.isSignedIn() || !navigator.onLine) return false;
+  // Cambiar de ámbito mientras hay un ciclo en marcha dejaría el motor con
+  // marcas de agua de un ámbito y el documento de otro.
+  if (sync?.running) return false;
+  // Sin nube configurada no hay equipos que consultar (y en las pruebas sin
+  // clave no se debe ni intentar: el error de red no es del usuario).
+  if (!cloudConfig().configured) return false;
+  // Si el usuario ha elegido expresamente «volver a modo personal», se
+  // respeta. Sin esta marca, cada arranque lo devolvería al equipo.
+  if (storage.storage.get('horus.team.auto') === '0' && !store.doc.teamId) return false;
+
+  let res;
+  try {
+    res = await teams.myTeams();
+  } catch (err) {
+    console.warn('[app] no se pudieron leer los equipos:', err);
+    return false;
+  }
+  if (!res.ok || !res.equipos?.length) return false;
+
+  const savedId = storage.storage.get(TEAM_KEY);
+  const currentId = store.doc.teamId || null;
+  const chosen = res.equipos.find((e) => e.id === currentId)
+    || res.equipos.find((e) => e.id === savedId)
+    || (res.equipos.length === 1 ? res.equipos[0] : null);
+  if (!chosen) {
+    // El documento dice que está en un equipo, pero la cuenta ya no pertenece a
+    // ninguno (la sacaron o el equipo se borró). Sin esto, la app se quedaba
+    // leyendo un ámbito que el servidor rechaza y todo parecía «no sincroniza».
+    if (currentId) {
+      store.actions.changeScope(null);
+      workspaceInfo = { id: null, name: '' };
+      storage.storage.remove(TEAM_KEY);
+      paintWorkspace();
+      notify.warning('Ya no perteneces a ese equipo. Se ha vuelto al cuadrante personal.');
+    }
+    return false;
+  }
+
+  workspaceInfo = { id: chosen.id, name: chosen.nombre || 'Equipo' };
+  storage.storage.set(TEAM_KEY, chosen.id);
+  storage.storage.set(TEAM_NAME_KEY, workspaceInfo.name);
+  paintWorkspace();
+
+  if (currentId === chosen.id) return true;
+
+  // Se guarda el cuadrante anterior en las copias rotativas antes de cambiar
+  // de ámbito. Si el pull falla, se vuelve al ámbito de partida y no se sube
+  // nada al equipo por accidente.
+  try { storage.writeDocument(store.doc); } catch { /* sin espacio: seguimos */ }
+  if (!store.actions.changeScope(chosen.id)) return false;
+
+  try {
+    const pulled = await sync.pull({ full: true, replace: true });
+    if (pulled?.applied > 0) {
+      notify.info(`Has entrado en el equipo «${workspaceInfo.name}».`, { duration: 5000 });
+    }
+  } catch (err) {
+    console.error('[app] no se pudo cargar el equipo:', err);
+    store.actions.changeScope(currentId);
+    notify.warning('No se pudo cargar el cuadrante del equipo. Se reintentará al sincronizar.');
+    return false;
+  }
+  try { storage.writeDocument(store.doc); } catch { /* sin espacio: se guardará al cambiar algo */ }
+  paintWorkspace();
+  invalidate();
+  return true;
+}
+
+/** Lleva a Ajustes y abre una pestaña concreta. */
+function showSettingsTab(tab = 'general') {
+  navigate('settings');
+  document.dispatchEvent(new CustomEvent('horus:settings-tab', { detail: { tab } }));
+}
+
+/* ==================================================================== *
  * Sincronización
  * ==================================================================== */
 
@@ -252,9 +532,13 @@ async function runSync({ manual = false, full = false } = {}) {
 
   const icon = byId('sync-icon');
   const button = byId('btn-sync');
-  button.disabled = true;
-  icon?.classList.add('spin');
-  if (manual) setStatus({ text: 'Sincronizando…', kind: 'syncing', sticky: true });
+  // El refresco periódico no debe hacer parpadear el botón ni el icono cada
+  // 30 segundos: solo la sincronización pedida por el usuario enseña progreso.
+  if (manual) {
+    button.disabled = true;
+    icon?.classList.add('spin');
+    setStatus({ text: 'Sincronizando…', kind: 'syncing', sticky: true });
+  }
 
   try {
     const result = await sync.sync({ full });
@@ -305,16 +589,26 @@ async function runSync({ manual = false, full = false } = {}) {
     }
   } catch (err) {
     console.error('[app] error de sincronización:', err);
+    // El error crítico de puesta en marcha no es de red: es que el proyecto de
+    // Supabase no tiene aplicada la migración de equipo. Sin este texto, el
+    // usuario ve «column owner_key does not exist» y no sabe qué hacer.
+    const faltaEsquema = /owner_key|client_updated_at|42703|column .* does not exist/i.test(String(err.message || ''));
+    const texto = faltaEsquema
+      ? 'La nube no tiene el esquema de equipo. Aplica supabase/migrations/0002_horus_team_scope.sql.'
+      : `No se pudo sincronizar: ${err.message}`;
     setStatus({
-      text: `No se pudo sincronizar: ${err.message}`,
+      text: texto,
       kind: 'error',
       sticky: true,
       action: { label: 'Reintentar', onClick: () => runSync({ manual: true }) },
     });
-    if (manual) notify.error(`No se pudo sincronizar: ${err.message}`);
+    if (manual) notify.error(texto);
   } finally {
-    icon?.classList.remove('spin');
-    button.disabled = false;
+    if (manual) {
+      icon?.classList.remove('spin');
+      button.disabled = false;
+    }
+    paintWorkspace();
   }
 }
 
@@ -323,6 +617,38 @@ function scheduleSyncPush() {
   if (!auth.isSignedIn() || !navigator.onLine || localMode) return;
   clearTimeout(syncPendingTimer);
   syncPendingTimer = setTimeout(() => { runSync(); }, 4000);
+}
+
+/**
+ * Refresco periódico: sin esto, los cambios de los demás miembros solo
+ * aparecían al recargar o al tocar «Sincronizar». Es la causa directa de «no
+ * veo lo que ha modificado mi compañero».
+ *
+ * No se ejecuta en pestañas ocultas ni sin sesión, y `sync.sync()` ya evita
+ * solaparse con otra sincronización en curso.
+ */
+function startBackgroundSync() {
+  stopBackgroundSync();
+  backgroundSyncTimer = setInterval(() => {
+    if (document.hidden || !auth.isSignedIn() || !navigator.onLine || localMode) return;
+    if (sync?.running) return;
+    runSync();
+  }, BACKGROUND_SYNC_MS);
+}
+
+function stopBackgroundSync() {
+  if (backgroundSyncTimer) clearInterval(backgroundSyncTimer);
+  backgroundSyncTimer = null;
+}
+
+function onVisibilitySync() {
+  if (document.visibilityState === 'visible' && auth.isSignedIn() && navigator.onLine) {
+    runSync();
+  }
+}
+
+function onFocusSync() {
+  if (auth.isSignedIn() && navigator.onLine) runSync();
 }
 
 /* ==================================================================== *
@@ -384,6 +710,7 @@ function startPersistence() {
     scheduler?.reschedule();
     paintUndoState();
     paintReadOnlyBanner();
+    paintWorkspace();
     invalidate();
   });
   // Guardado de seguridad al cerrar o cambiar de pestaña
@@ -429,7 +756,12 @@ const context = {
   setFilters: () => invalidate(),
   openAssign: (preset) => openAssignDialog(context, preset),
   openDay: (date) => openDayEditor(context, date),
-  openType: (id, opts) => openTypeEditor(context, id, opts),
+  // «Abrir un turno» es llevar a su sitio: el catálogo se edita en la vista
+  // Turnos (js/ui/views/shifts.js), no desde el Cuadrante.
+  openType: (id) => {
+    navigate('shifts');
+    focusShift(id);
+  },
   openMember: (id, opts) => openMemberEditor(context, id, opts),
   openExport: (opts) => openExportDialog(context, opts),
   /** Importación de un cuadrante desde el PDF de la empresa. */
@@ -589,9 +921,13 @@ function startWithLocalData() {
 }
 
 async function afterSignIn() {
+  // Lo primero: si la cuenta pertenece a un equipo, entrar en él. Así el
+  // cuadrante que se ve es el compartido, no un cuadrante personal vacío.
+  const adopted = await adoptTeamWorkspace();
+
   // El cuadrante puede existir ya en este dispositivo: entonces no se pregunta
   // nada más y se entra directo.
-  if (store.doc.settings.firstRun === false && store.doc.members.length) {
+  if (adopted || (store.doc.settings.firstRun === false && store.doc.members.length)) {
     await bootApp();
     await offerLegacyImport();
     runSync();
@@ -660,6 +996,10 @@ async function doSignOut() {
   if (!ok) return;
   stopTimers();
   await auth.signOut();
+  // La preferencia «quedarme en personal» es de la sesión que se va; otra
+  // cuenta en este dispositivo debe poder entrar en su equipo sin heredarla.
+  storage.storage.remove('horus.team.auto');
+  workspaceInfo = { id: null, name: '' };
   store = createStore(storage.loadDocument().doc);
   sync = createSyncEngine({ getDoc: () => store.doc, replaceDoc: (d, m) => store.replaceDocument(d, { ...m, silent: true }) });
   showAuthScreen();
@@ -942,6 +1282,7 @@ async function bootApp() {
   paintUndoState();
   paintConnectivity();
   paintReadOnlyBanner();
+  paintWorkspace();
   // El rol real del usuario en el equipo, preguntado al servidor (si hay).
   refrescarRolEquipo();
 
@@ -970,6 +1311,7 @@ async function mountViews() {
     ['today', mountToday],
     ['calendar', mountCalendar],
     ['roster', mountRoster],
+    ['shifts', mountShifts],
     ['team', mountTeam],
     ['hours', mountHours],
     ['settings', mountSettings],
@@ -1010,6 +1352,9 @@ function wireTopbar() {
 
   byId('btn-sync').onclick = () => runSync({ manual: true });
 
+  // El indicador de equipo lleva directo a la pestaña que importa.
+  byId('workspace-pill')?.addEventListener('click', () => showSettingsTab('team'));
+
   byId('btn-undo').onclick = () => {
     if (!store.canUndo()) return;
     const label = store.undoLabel();
@@ -1020,11 +1365,14 @@ function wireTopbar() {
   };
 
   for (const button of $$('.nav-item')) {
+    if (!button.dataset.view) continue;   // «Más» no navega: despliega
     button.addEventListener('click', () => navigate(button.dataset.view, { focus: true }));
   }
   for (const button of $$('[data-go]')) {
     button.addEventListener('click', () => navigate(button.dataset.go, { focus: true }));
   }
+
+  wireNavMore();
 
   // Diálogos comunes
   wireAllDialogs();
@@ -1129,7 +1477,7 @@ function addMonthsKey(monthKey, delta) {
 
 function showShortcuts() {
   const rows = [
-    ['H', 'Ir a Hoy'],
+    ['H', 'Ir a Inicio'],
     ['C', 'Ir al Calendario'],
     ['U', 'Ir al Cuadrante'],
     ['E', 'Ir a Equipo'],
@@ -1204,20 +1552,32 @@ function stopClock() {
 
 function stopTimers() {
   stopClock();
+  stopBackgroundSync();
   clearTimeout(syncPendingTimer);
   scheduler?.stop();
   window.removeEventListener('online', onOnline);
   window.removeEventListener('offline', onOffline);
+  window.removeEventListener('focus', onFocusSync);
+  document.removeEventListener('visibilitychange', onVisibilitySync);
 }
 
 function startNetworkWatchers() {
   window.addEventListener('online', onOnline);
   window.addEventListener('offline', onOffline);
+  // Al volver a la pestaña o a la ventana, se pregunta por cambios. Es barato
+  // (un pull incremental) y evita la sensación de que la app «se ha quedado
+  // congelada» con datos de hace horas.
+  window.addEventListener('focus', onFocusSync);
+  document.addEventListener('visibilitychange', onVisibilitySync);
+  startBackgroundSync();
 }
 
-function onOnline() {
+async function onOnline() {
   notify.success('Conexión restaurada');
   paintConnectivity();
+  // Si se inició sesión sin conexión, este es el primer momento para saber a
+  // qué equipo pertenece la cuenta.
+  if (auth.isSignedIn()) await adoptTeamWorkspace();
   runSync();
 }
 
@@ -1383,6 +1743,10 @@ async function boot() {
   }
 
   if (screen === 'app') {
+    if (signedIn) {
+      const adopted = await adoptTeamWorkspace();
+      if (adopted) localMode = false;
+    }
     await bootApp();
     if (redirect?.type === 'recovery') {
       // Tras recuperar la contraseña, avisar de dónde cambiarla

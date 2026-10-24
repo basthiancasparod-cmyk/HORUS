@@ -48,8 +48,8 @@
   ],
   "shortcuts": [
     {
-      "name": "Hoy",
-      "short_name": "Hoy",
+      "name": "Inicio",
+      "short_name": "Inicio",
       "description": "Quién trabaja ahora y qué falta por cubrir",
       "url": "./index.html#today",
       "icons": [{ "src": "icons/icon-96.png", "sizes": "96x96" }]

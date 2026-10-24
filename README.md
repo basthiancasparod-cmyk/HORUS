@@ -9,6 +9,37 @@ si quieres, se sincronizan con Supabase.
 
 ---
 
+## Qué cambia en la v5
+
+La v5 no añade funciones: ordena las que había y arregla el motivo por el que el
+equipo no se veía igual en todos los dispositivos.
+
+- **El equipo se carga solo al iniciar sesión.** Si la cuenta pertenece a un
+  equipo, la PC entra en su cuadrante aunque nunca lo haya abierto. Antes había
+  que pegar el código de invitación en cada dispositivo.
+- **Sincroniza en los dos sentidos y en el orden correcto.** Primero baja, luego
+  sube. Una PC con datos viejos ya no puede pisar lo que el móvil escribió
+  después. Además se refresca cada 30 s, al volver a la pestaña y al recuperar
+  la conexión, sin recargar.
+- **Cuatro secciones, no siete.** Inicio, Cuadrante, Equipo y Ajustes. Calendario,
+  Turnos y Horas siguen existiendo en Ajustes → General → Herramientas (y en el
+  «Más» del móvil), pero dejan de competir con lo que se usa a diario.
+- **Ajustes en tres pestañas.** General (tema y avisos), Equipo y cuenta, y
+  Avanzado. Lo técnico —claves de IA, Supabase propio, importaciones, copias y
+  zona delicada— queda en Avanzado.
+- **La cabecera dice dónde estás.** Un indicador muestra «Personal» o el nombre
+  del equipo; al pulsarlo se abre la pestaña del equipo.
+
+Los detalles técnicos están en [`docs/REESTRUCTURA-V5.md`](docs/REESTRUCTURA-V5.md).
+
+> La sincronización de equipo necesita las migraciones
+> [`0001_horus_schema.sql`](supabase/migrations/0001_horus_schema.sql) y
+> [`0002_horus_team_scope.sql`](supabase/migrations/0002_horus_team_scope.sql)
+> aplicadas en el proyecto de Supabase. Sin la 0002, las filas no tienen
+> `owner_key` y cada miembro sigue viendo solo lo suyo.
+
+---
+
 ## Qué resuelve
 
 Un cuadrante de turnos no es un calendario personal. Las preguntas que importan
@@ -16,8 +47,8 @@ son otras:
 
 | Pregunta | Dónde se responde |
 |---|---|
-| ¿Quién trabaja ahora mismo? | **Hoy** → «De guardia ahora», con lo que le queda a cada uno |
-| ¿Qué franjas del día se quedan sin nadie? | **Hoy** → «Huecos de cobertura», y el punto de color en cada día del calendario |
+| ¿Quién trabaja ahora mismo? | **Inicio** → «De guardia ahora», con lo que le queda a cada uno |
+| ¿Qué franjas del día se quedan sin nadie? | **Inicio** → «Huecos de cobertura», y el punto de color en cada día del calendario |
 | ¿Cómo queda el mes completo, persona por persona? | **Cuadrante** → rejilla equipo × días con totales y fila de cobertura |
 | ¿Cuántas horas lleva cada uno, y cuántas de noche? | **Horas** → mes, trimestre o año, con objetivos y desviaciones |
 | ¿Quién está por encima de su contrato esta semana? | **Equipo** → avisos y carga de trabajo |
@@ -85,13 +116,13 @@ son otras:
 **Equipos (cuadrante compartido)**
 - Un equipo es **un cuadrante para varias personas**: cada una entra con su
   cuenta y todas ven y editan el mismo cuadrante, con los turnos de todas.
-- Se crea desde **Ajustes → Equipo → «Crear un equipo»**, y se entra en el de
+- Se crea desde **Ajustes → Equipo y cuenta → «Crear un equipo»**, y se entra en el de
   otra persona con **«Entrar con un código»** y el código de invitación que te
   pase quien lo creó.
 - **Roles**: propietario, administrador, miembro y solo lectura. El rol decide
   lo que se puede tocar y lo impone el servidor (RLS), no el navegador.
   Con «solo lectura» la app lo avisa y deja los botones desactivados.
-- Cambiar de personal a equipo (y volver) se hace desde Ajustes → Equipo, con un
+- Cambiar de personal a equipo (y volver) se hace desde Ajustes → Equipo y cuenta, con un
   aviso por escrito de qué pasa con el cuadrante. **Nada se borra**: el cuadrante
   personal sigue guardado en la nube por si quieres volver.
 
@@ -147,7 +178,7 @@ guardarla, diciendo por qué.
 ### Cuadrante de equipo (opcional)
 
 Con cuenta, el cuadrante puede ser **de un equipo** en vez de personal. Todo se
-hace desde **Ajustes → Equipo**:
+hace desde **Ajustes → Equipo y cuenta**:
 
 1. **Crear un equipo**: pide un nombre y crea el equipo con su **código de
    invitación**. Quien lo crea queda como **propietario**.
@@ -227,6 +258,7 @@ tools/
   pdf-grid.mjs        Volcado de la rejilla detectada en un cuadrante
 docs/
   ARCHITECTURE.md     Decisiones de diseño y qué se arregló respecto a la v1
+  REESTRUCTURA-V5.md  Qué cambia en la v5: sync, equipos y nueva interfaz
   VIEW-CONTRACT.md    Contrato para escribir una vista nueva
   PDF-FORMAT.md       Formato del cuadrante en PDF, medido y documentado
   AI-IMPORT.md        Leer el cuadrante de una foto: contrato y hallazgos medidos

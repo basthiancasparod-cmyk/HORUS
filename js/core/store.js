@@ -140,13 +140,15 @@ export function createStore(initialDoc = emptyDocument()) {
     }
 
     const next = normalizeDocument(draft);
-    if (documentFingerprint(next) === documentFingerprint(doc)) {
+    const huellaNext = documentFingerprint(next);
+    if (huellaNext === huellaActual()) {
       // Nada cambió de verdad: no se ensucia el historial ni la revisión
       if (!grouped) undoStack.pop();
       return false;
     }
 
     doc = next;
+    huellaMemo = { doc, valor: huellaNext };
     meta.dirty = true;
     meta.lastAction = label;
     meta.localRev++;
@@ -187,6 +189,9 @@ export function createStore(initialDoc = emptyDocument()) {
       batchSnapshot = structuredClone ? structuredClone(doc) : JSON.parse(JSON.stringify(doc));
       batchLabel = label;
       batchFailed = false;
+      // El documento se va a mutar EN EL SITIO: la huella memorizada del
+      // documento actual dejaría de ser cierta.
+      huellaMemo = { doc: null, valor: '' };
     }
     batchDepth++;
     try {
@@ -207,14 +212,20 @@ export function createStore(initialDoc = emptyDocument()) {
           notify();
         } else {
           const next = normalizeDocument(doc);
-          const changed = documentFingerprint(next) !== documentFingerprint(before);
+          const huellaNext = documentFingerprint(next);
+          const changed = huellaNext !== documentFingerprint(before);
           if (changed) {
             next.rev = (Number(before.rev) || 1) + 1;
             next.updatedAt = Date.now();
             doc = next;
+            huellaMemo = { doc, valor: huellaNext };
             pushHistory(before, label || 'cambio agrupado');
             meta.dirty = true;
             meta.lastAction = label || 'cambio agrupado';
+          } else {
+            // `doc` sigue siendo el objeto mutado en el sitio: su huella
+            // memorizada ya no vale, se recalculará cuando haga falta.
+            huellaMemo = { doc: null, valor: '' };
           }
           const shouldNotify = pendingNotify;
           pendingNotify = false;
@@ -246,26 +257,121 @@ export function createStore(initialDoc = emptyDocument()) {
    * ------------------------------------------------------------------ */
 
   /**
+   * Campos que NO son contenido, sino marcas de reloj que mueve el propio
+   * store. Si entraran en la huella, cualquier toque contaría como cambio
+   * aunque el usuario no hubiera cambiado nada: `setEntry`, por ejemplo,
+   * reescribe `updatedAt` en cada llamada.
+   */
+  const CAMPOS_DE_RELOJ = new Set(['createdAt', 'updatedAt', 'updatedBy']);
+
+  /**
+   * Serializa un valor de forma ESTABLE: dentro de un objeto las claves se
+   * ordenan, así que dos valores iguales dan siempre la misma cadena, se hayan
+   * construido en el orden que se hayan construido.
+   */
+  function valorEstable(v) {
+    if (v === null || v === undefined) return String(v);
+    if (Array.isArray(v)) return `[${v.map(valorEstable).join(',')}]`;
+    if (typeof v === 'object') {
+      return `{${Object.keys(v).sort().map((k) => `${k}:${valorEstable(v[k])}`).join(',')}}`;
+    }
+    return String(v);
+  }
+
+  /**
+   * Lista de campos que cuentan, cacheada por «forma» del objeto.
+   *
+   * Todos los miembros (o todas las entradas, o todos los turnos) tienen las
+   * mismas claves, así que la lista se calcula una vez por forma y no una vez
+   * por entidad: `Object.keys(x).join(',')` es barato y acierta casi siempre.
+   */
+  let formaCache = '';
+  let clavesCache = [];
+
+  function clavesQueCuentan(x) {
+    const forma = Object.keys(x).join(',');
+    if (forma === formaCache) return clavesCache;
+    formaCache = forma;
+    clavesCache = Object.keys(x).filter((k) => !CAMPOS_DE_RELOJ.has(k)).sort();
+    return clavesCache;
+  }
+
+  /**
+   * Huella de una entidad: TODOS sus campos menos las marcas de reloj.
+   *
+   * Se deriva del propio objeto A PROPÓSITO. Antes era una lista de campos
+   * escrita a mano y se quedaba atrás conforme crecía el modelo: de un tipo de
+   * turno no estaban `archived`, `countsHours`, `paid`, `order` ni `short`, así
+   * que un cambio que solo los tocara se consideraba «nada ha cambiado» y se
+   * perdía en silencio (archivar un turno, por ejemplo, no hacía nada). Con las
+   * claves del objeto, un campo nuevo entra solo.
+   *
+   * Los primitivos se concatenan directamente (el motor los convierte) porque
+   * esto se ejecuta una vez por entidad y por comparación.
+   */
+  function huellaDeEntidad(x) {
+    const claves = clavesQueCuentan(x);
+    let out = '';
+    for (const k of claves) {
+      const v = x[k];
+      out += (v !== null && typeof v === 'object')
+        ? `${k}=${valorEstable(v)};`
+        : `${k}=${v};`;
+    }
+    return out;
+  }
+
+  /**
+   * Listas del documento que se recorren entidad a entidad más abajo. Se
+   * nombran para que el recorrido genérico de escalares no las duplique: todo lo
+   * demás del documento (escalares y objetos, incluidos los ajustes) entra solo,
+   * así que un campo nuevo no se queda fuera de la huella.
+   */
+  const LISTAS_DE_ENTIDADES = new Set(['members', 'shiftTypes', 'entries', 'patterns']);
+
+  /**
    * Compara documentos sin serializar todo (que es caro con miles de
-   * entradas). Casa escalares, recuentos y luego entrada por entrada.
+   * entradas): lo primero los escalares del documento, luego los recuentos y
+   * después entidad por entidad.
+   *
+   * El ORDEN de `members`, `shiftTypes`, `entries` y `patterns` cuenta (es
+   * información: reordenar un catálogo es un cambio); el de `dayMeta` no, así
+   * que sus claves se ordenan para no inventarse cambios.
    */
   function documentFingerprint(d) {
-    const head = [
-      d.meId, d.name, d.teamId, d.members.length, d.shiftTypes.length,
-      d.entries.length, d.patterns.length, Object.keys(d.dayMeta).length,
-      JSON.stringify(d.settings),
-    ].join('|');
-    const parts = [head];
-    for (const m of d.members) parts.push(`m:${m.id}:${m.name}:${m.hex}:${m.active}:${m.weeklyHours}`);
-    for (const s of d.shiftTypes) {
-      parts.push(`s:${s.id}:${s.code}:${s.label}:${s.hex}:${s.demand}:${s.kind}:${JSON.stringify(s.blocks)}`);
+    const partes = [];
+    for (const clave of Object.keys(d).sort()) {
+      const v = d[clave];
+      if (clave === 'rev' || CAMPOS_DE_RELOJ.has(clave)) continue;   // los mueve el store
+      if (LISTAS_DE_ENTIDADES.has(clave) || clave === 'dayMeta') continue;
+      partes.push(`${clave}=${valorEstable(v)}`);
     }
-    for (const e of d.entries) {
-      parts.push(`e:${e.id}:${e.memberId}:${e.date}:${e.typeId}:${e.dayType}:${e.notes}:${e.demandOverride}:${e.approved}:${JSON.stringify(e.blocks)}`);
-    }
-    for (const [k, v] of Object.entries(d.dayMeta)) parts.push(`d:${k}:${JSON.stringify(v)}`);
-    for (const p of d.patterns) parts.push(`p:${p.id}:${p.name}:${p.startDate}:${p.stepDays}:${JSON.stringify(p.cycle)}`);
-    return parts.join('|');
+    partes.push(`#${d.members.length}:${d.shiftTypes.length}:${d.entries.length}:${d.patterns.length}`);
+    for (const m of d.members) partes.push(`m:${huellaDeEntidad(m)}`);
+    for (const s of d.shiftTypes) partes.push(`s:${huellaDeEntidad(s)}`);
+    for (const e of d.entries) partes.push(`e:${huellaDeEntidad(e)}`);
+    for (const k of Object.keys(d.dayMeta).sort()) partes.push(`d:${k}:${huellaDeEntidad(d.dayMeta[k])}`);
+    for (const p of d.patterns) partes.push(`p:${huellaDeEntidad(p)}`);
+    return partes.join('|');
+  }
+
+  /**
+   * Huella del documento que hay AHORA, memorizada.
+   *
+   * Cada `apply()` compara el documento nuevo con el actual, y eso son dos
+   * recorridos completos del cuadrante. El actual no cambia entre acciones, así
+   * que su huella se guarda al confirmar el cambio anterior y se reutiliza: se
+   * paga una sola serialización por acción.
+   *
+   * La clave es el propio objeto, así que sustituir el documento (deshacer,
+   * importar, sincronizar) invalida la memoria sola. Lo único que muta el
+   * documento en el sitio es un lote (`commitBatch`), y ahí se borra a mano.
+   */
+  let huellaMemo = { doc: null, valor: '' };
+
+  function huellaActual() {
+    if (huellaMemo.doc !== doc) huellaMemo = { doc, valor: documentFingerprint(doc) };
+    return huellaMemo.valor;
   }
 
   /* ------------------------------------------------------------------ *

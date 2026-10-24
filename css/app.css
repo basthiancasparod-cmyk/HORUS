@@ -158,6 +158,10 @@
 
 .nav-item {
   flex: 1 1 0;
+  /* Con siete secciones (Hoy, Calendario, Cuadrante, Turnos, Equipo, Horas y
+     Ajustes) la barra del móvil se aprieta: los elementos tienen que poder
+     encoger por debajo del ancho de su texto. */
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -175,6 +179,15 @@
 
 .nav-item:hover { color: var(--text); }
 
+/* La etiqueta no se sale de su botón: se recorta con puntos suspensivos si no
+   cabe (en el móvil se usa la etiqueta corta de `data-short-label`). */
+.nav-item > .nav-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .nav-item .nav-icon {
   position: relative;
   display: grid;
@@ -188,7 +201,85 @@
 .nav-item[aria-current='page'] { color: var(--accent); }
 .nav-item[aria-current='page'] .nav-icon { background: var(--accent-soft); }
 
+/* En el móvil, la etiqueta larga se cambia por la corta (`data-short-label`)
+   para que las cinco piezas de la barra quepan y sigan siendo tocables con el
+   dedo: con el texto completo, «Calendario» y «Cuadrante» no caben a 320 px. El
+   nombre completo sigue estando en el `aria-label` del botón, así que un lector
+   de pantalla lo lee igual. */
+@media (max-width: 899px) {
+  .nav-item > .nav-label { display: none; }
+  .nav-item::after {
+    content: attr(data-short-label);
+    font-size: var(--fs-2xs);
+    line-height: 1.1;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   «Más»: los apartados que no caben en la barra del móvil
+
+   La barra lleva cuatro fijos (Inicio, Cuadrante, Equipo y Ajustes) y un quinto
+   botón que despliega los demás. Con siete seguidos, a 320 px cada uno se queda
+   en ~43 px: por debajo del área de toque mínima de la app (44 px) y con las
+   etiquetas pisándose. El punto de corte es el MISMO que usa la app para pasar
+   de barra inferior a menú lateral (`min-width: 900px`), no uno nuevo.
+   -------------------------------------------------------------------------- */
+
+/* En escritorio no hay desplegable: el menú lateral los enseña todos. */
 @media (min-width: 900px) {
+  .nav-more-toggle,
+  .nav-more-panel { display: none; }
+}
+
+@media (max-width: 899px) {
+  /* Los tres apartados que viven dentro de «Más» no se pintan en la barra. */
+  .nav-item[data-extra] { display: none; }
+
+  .nav-more-toggle[aria-expanded='true'] { color: var(--accent); }
+  .nav-more-toggle[aria-expanded='true'] .nav-icon { background: var(--accent-soft); }
+
+  .nav-more-panel {
+    position: absolute;
+    /* Se abre ENCIMA de la barra: debajo quedaría cortado por el borde de la
+       pantalla. La barra es `position: fixed`, así que es su bloque contenedor. */
+    bottom: calc(100% + var(--sp-2));
+    left: var(--sp-2);
+    right: var(--sp-2);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    padding: var(--sp-2);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* El atributo `hidden` manda: el panel solo se ve cuando está abierto. */
+  .nav-more-panel[hidden] { display: none; }
+
+  .nav-more-item {
+    display: flex;
+    align-items: center;
+    min-height: var(--tap-min);
+    padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--r-md);
+    color: var(--text-dim);
+    font-size: var(--fs-md);
+    font-weight: 600;
+    text-align: left;
+  }
+
+  .nav-more-item:hover { color: var(--text); background: var(--surface-2); }
+  .nav-more-item[aria-current='page'] { color: var(--accent); background: var(--accent-soft); }
+}
+
+@media (min-width: 900px) {
+  /* La barra principal se queda en cuatro: Inicio, Cuadrante, Equipo y
+     Ajustes. Calendario, Turnos y Horas viven en Ajustes → General →
+     Herramientas (y en el «Más» del móvil). */
+  .nav-item.nav-secondary { display: none; }
+
   .nav-item {
     flex: 0 0 auto;
     flex-direction: row;
@@ -1158,6 +1249,93 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 
 .settings-group > .section-label {
   padding: var(--sp-2) var(--sp-1) 0;
+}
+
+/* Pestañas de Ajustes: tres bloques en vez de una lista interminable. */
+.settings-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow-x: auto;
+}
+
+.settings-tab {
+  flex: 1 1 0;
+  min-height: 40px;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: calc(var(--r-lg) - 4px);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.settings-tab:hover { color: var(--text); }
+
+.settings-tab.is-active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.16));
+}
+
+.settings-intro {
+  margin: 0;
+  padding: 0 var(--sp-1);
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+}
+
+/* `display:flex` de .settings-group pisaría el atributo `hidden`; esta regla
+   devuelve el comportamiento esperado al cambiar de pestaña. */
+.settings-group[hidden],
+.danger-zone[hidden] { display: none !important; }
+
+/* Indicador del espacio de trabajo (personal o equipo) en la cabecera. */
+.workspace-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 170px;
+  min-height: 32px;
+  padding: 4px var(--sp-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.workspace-pill:hover { color: var(--text); border-color: var(--border-strong, var(--border)); }
+
+.workspace-pill #workspace-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.workspace-pill[data-scope='team'] .workspace-dot { background: var(--success); }
+
+@media (max-width: 599px) {
+  .workspace-pill { max-width: 104px; }
+}
+
+@media (max-width: 399px) {
+  /* A 320 px el nombre del equipo no cabe junto a los tres iconos: queda el
+     punto de color, que sigue distinguiendo personal (gris) de equipo (verde). */
+  .workspace-pill { max-width: 32px; padding: 0; justify-content: center; }
+  .workspace-pill #workspace-name { display: none; }
 }
 
 .danger-zone { border-color: color-mix(in srgb, var(--danger) 35%, transparent); }

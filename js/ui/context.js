@@ -21,12 +21,13 @@ export function getContext() {
  * Navegación
  * ------------------------------------------------------------------ */
 
-export const VIEWS = ['today', 'calendar', 'roster', 'team', 'hours', 'settings'];
+export const VIEWS = ['today', 'calendar', 'roster', 'shifts', 'team', 'hours', 'settings'];
 
 export const VIEW_TITLES = {
-  today: 'Hoy',
+  today: 'Inicio',
   calendar: 'Calendario',
   roster: 'Cuadrante',
+  shifts: 'Turnos',
   team: 'Equipo',
   hours: 'Horas',
   settings: 'Ajustes',

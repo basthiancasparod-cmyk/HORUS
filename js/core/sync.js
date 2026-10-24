@@ -489,6 +489,29 @@ export function createSyncEngine(deps) {
     }
   }
 
+  /**
+   * Convierte los borrados locales en lápidas ANTES de bajar cambios.
+   *
+   * Con el orden nuevo (pull → push), una fila borrada en este dispositivo
+   * seguía viva en el servidor cuando el pull la consultaba, y el pull la
+   * volvía a insertar: el borrado se perdía y el push ya no tenía nada que
+   * propagar. La lápida es exactamente la información que el pull necesita
+   * para saber que esa fila no debe resucitar.
+   */
+  function rememberLocalDeletions() {
+    const { toDelete } = diff();
+    let changed = false;
+    for (const item of toDelete) {
+      if (item.fromTombstone) continue;
+      const exists = state.tombstones.some((t) => t.table === item.table && t.id === item.id);
+      if (!exists) {
+        state.tombstones.push({ table: item.table, id: item.id, deletedAt: Date.now() });
+        changed = true;
+      }
+    }
+    if (changed) saveSyncState(state);
+  }
+
   /** Anota un conflicto para poder avisar al usuario (máximo 50, los últimos). */
   function recordConflict(conflict) {
     state.conflicts = (state.conflicts || []).filter((c) => !(c.table === conflict.table && c.id === conflict.id));
@@ -543,12 +566,16 @@ export function createSyncEngine(deps) {
   async function upsertRows(table, rows, ownerKey) {
     const userId = currentSession()?.userId;
     if (!userId || !ownerKey) throw new AuthError('No hay sesión iniciada.');
+    // `updated_at` NO se manda: lo pone el servidor (default `now()` en el
+    // INSERT y el trigger `horus_touch_updated_at` en el UPDATE). Mandarlo con
+    // el reloj del dispositivo era peor que inútil: una PC atrasada escribía
+    // una marca más antigua que la del móvil y el pull incremental la tomaba
+    // como «ya vista», dejando el cambio fuera para siempre.
     const body = rows.map((r) => ({
       ...r,
       owner_key: ownerKey,
       user_id: userId,
       deleted: false,
-      updated_at: new Date().toISOString(),
     }));
     const response = await api(`/rest/v1/${table}`, {
       method: 'POST',
@@ -661,28 +688,32 @@ export function createSyncEngine(deps) {
 
   /**
    * Baja los cambios remotos y los fusiona por entidad.
+   *
+   * `replace` sirve para el caso «esta PC nunca ha estado en este equipo»: en
+   * lugar de fusionar lo remoto con un cuadrante personal que no pinta nada en
+   * el equipo, se construye el documento SOLO con lo que hay en el servidor.
+   * Es lo que hace que al abrir la cuenta en otro dispositivo aparezca el
+   * cuadrante del equipo, en vez de subir antes el cuadrante local y pisarlo.
+   *
+   * @param {{full?:boolean, replace?:boolean}} [opts]
    * @returns {Promise<{applied:number, conflicts:object[]}>}
    */
-  async function pull({ full = false } = {}) {
+  async function pull({ full = false, replace = false } = {}) {
     const doc = getDoc();
     const scope = ensureScope();
     if (!scope) throw new AuthError('No hay sesión iniciada.');
+    if (!replace) rememberLocalDeletions();
     const descriptors = buildDescriptors(doc);
-    const localHashes = Object.fromEntries(
-      Object.entries(descriptors).map(([key, desc]) => {
-        const map = {};
-        for (const row of desc.rows()) map[String(row[desc.pk])] = fingerprint({ ...row, payload: undefined });
-        return [key, map];
-      }),
-    );
 
-    const merged = {
-      members: [...doc.members],
-      shiftTypes: [...doc.shiftTypes],
-      entries: [...doc.entries],
-      patterns: [...doc.patterns],
-      dayMeta: { ...doc.dayMeta },
-    };
+    const merged = replace
+      ? { members: [], shiftTypes: [], entries: [], patterns: [], dayMeta: {} }
+      : {
+        members: [...doc.members],
+        shiftTypes: [...doc.shiftTypes],
+        entries: [...doc.entries],
+        patterns: [...doc.patterns],
+        dayMeta: { ...doc.dayMeta },
+      };
 
     let applied = 0;
     const conflicts = [];
@@ -773,13 +804,18 @@ export function createSyncEngine(deps) {
         if (!entity) continue;
         const stamp = remoteStamp(row);
         const local = index.get(id);
-        const localStamp = local ? (Number(local.updatedAt) || Number(local.createdAt) || 0) : 0;
+        const localStamp = local
+          ? (replace ? 0 : (Number(local.updatedAt) || Number(local.createdAt) || 0))
+          : 0;
 
-        // ¿Tengo cambios locales sin subir en esta misma fila?
+        // ¿Tengo cambios locales sin subir en esta misma fila? En modo
+        // `replace` no hay nada local que conservar: manda el servidor.
         const syncedFingerprint = knownHashes[id];
-        const locallyModified = !local
+        const locallyModified = replace
           ? false
-          : (!syncedFingerprint || entityFingerprint(key, local, id) !== syncedFingerprint);
+          : (!local
+            ? false
+            : (!syncedFingerprint || entityFingerprint(key, local, id) !== syncedFingerprint));
 
         if (!local) {
           // Fila que aún no tengo: se añade sin más, no hay nada que pisar.
@@ -823,9 +859,18 @@ export function createSyncEngine(deps) {
         }
 
         nextIds.add(id);
-        nextHashes[id] = stamp > localStamp
-          ? entityFingerprint(key, index.get(id), id)
-          : (knownHashes[id] ?? entityFingerprint(key, index.get(id), id));
+        if (stamp > localStamp) {
+          // Se ha aplicado la versión remota: la huella es la de lo aplicado.
+          nextHashes[id] = entityFingerprint(key, index.get(id), id);
+        } else if (locallyModified) {
+          // Mi copia es más nueva y NO está subida. La huella tiene que seguir
+          // siendo la última sincronizada (o no existir), no la de mi copia:
+          // guardar la huella local aquí haría creer al push que ya está todo
+          // subido y la edición se quedaría para siempre en este dispositivo.
+          nextHashes[id] = knownHashes[id];
+        } else {
+          nextHashes[id] = knownHashes[id] ?? entityFingerprint(key, index.get(id), id);
+        }
       }
 
       // Refleja el resultado en el documento fusionado
@@ -848,7 +893,56 @@ export function createSyncEngine(deps) {
       saveSyncState(state);
     }
 
-    if (applied > 0 || conflicts.length) {
+    if (replace) {
+      // Un equipo vacío no debe borrar el cuadrante que el usuario tenía en
+      // esta PC: si el servidor no trae ni un turno y aquí sí hay, se conserva
+      // lo local y el push lo sube al equipo. Solo se reemplaza cuando hay un
+      // cuadrante remoto real (o cuando aquí no había nada que conservar).
+      const remoteHasEntries = (merged.entries?.length || 0) > 0;
+      const onlyIfRemote = remoteHasEntries || doc.entries.length === 0;
+      if (applied > 0 && onlyIfRemote) {
+        const next = { ...doc, ...merged };
+        // Un equipo recién creado puede no tener catálogo todavía. En ese caso
+        // no se deja al usuario con una app sin turnos: se conserva el local y
+        // el siguiente push lo sube al ámbito nuevo.
+        if (!next.members.length) next.members = doc.members;
+        if (!next.shiftTypes.length) next.shiftTypes = doc.shiftTypes;
+
+        // `meId` es una referencia local a una ficha. Al cambiar de ámbito, los
+        // ids son otros: se busca la ficha del usuario por nombre para que
+        // «Mi próximo turno» siga funcionando en el dispositivo nuevo.
+        const me = doc.members.find((m) => m.id === doc.meId);
+        if (me) {
+          const nombre = String(me.name || '').trim().toLowerCase();
+          const match = next.members.find(
+            (m) => String(m.name || '').trim().toLowerCase() === nombre,
+          );
+          next.meId = match?.id || null;
+        } else {
+          next.meId = next.members.some((m) => m.id === doc.meId) ? doc.meId : null;
+        }
+        replaceDoc(next, { label: 'cargar el cuadrante del equipo', history: false, silent: true });
+      } else if (applied > 0) {
+        // El equipo tiene personas/catálogo pero ningún turno, y aquí sí hay
+        // cuadrante: se conserva lo local y se le suman las fichas y turnos
+        // remotos, para que el push no borre a los miembros que ya estaban.
+        const unir = (locales, remotos) => {
+          const mapa = new Map();
+          for (const item of locales) mapa.set(item.id, item);
+          for (const item of remotos) if (!mapa.has(item.id)) mapa.set(item.id, item);
+          return [...mapa.values()];
+        };
+        merged.members = unir(doc.members, merged.members);
+        merged.shiftTypes = unir(doc.shiftTypes, merged.shiftTypes);
+        merged.patterns = unir(doc.patterns, merged.patterns);
+        merged.entries = [...doc.entries];
+        merged.dayMeta = { ...doc.dayMeta, ...merged.dayMeta };
+        replaceDoc(
+          { ...doc, ...merged },
+          { label: 'preparar el equipo', history: false, silent: true },
+        );
+      }
+    } else if (applied > 0 || conflicts.length) {
       replaceDoc(
         { ...doc, ...merged },
         { label: 'sincronizar desde la nube', history: false, silent: true },
@@ -860,8 +954,16 @@ export function createSyncEngine(deps) {
   /* ---------------- ciclo completo ---------------- */
 
   /**
-   * Sincroniza: primero sube, luego baja (así el servidor nunca pisa lo propio
-   * antes de haberlo recibido).
+   * Sincroniza: primero BAJA, luego SUBE.
+   *
+   * El orden importa y antes estaba al revés. Si una PC lleva días sin abrir la
+   * app y sincroniza, su copia local es vieja; subirla primero sobrescribía en
+   * el servidor lo que el móvil había escrito después, con la marca del servidor
+   * recién puesta. El pull posterior ya no podía recuperar nada: el dato bueno
+   * se había perdido. Bajando primero, la copia local se fusiona con la remota
+   * (gana la marca más reciente de cada fila) y solo después se sube lo que de
+   * verdad sigue pendiente.
+   *
    * @param {{full?:boolean, silent?:boolean}} [opts]
    */
   async function sync({ full = false, silent = false } = {}) {
@@ -881,8 +983,17 @@ export function createSyncEngine(deps) {
     running = true;
     setStatus(STATUS.syncing);
     try {
-      const pushed = await push({ full });
+      const hadNoWatermark = Object.keys(state.lastPullAt).length === 0;
       const pulled = await pull({ full });
+      // El push va con el diff normal, no con `full`: tras el pull, lo que ya
+      // coincide con el servidor no se reenvía. `full` solo fuerza un pull
+      // completo (el caso de «no sé qué hay en la nube»).
+      const pushed = await push();
+      // Primer sync de un dispositivo: las filas que acaba de subir no tienen
+      // marca de agua porque el pull fue antes de que existieran. Un pull
+      // incremental extra la fija con la hora DEL SERVIDOR; sin esto, cada
+      // arranque volvería a bajar el cuadrante entero.
+      if (hadNoWatermark && pushed.pushed > 0) await pull();
       lastResult = {
         at: Date.now(),
         pushed: pushed.pushed,

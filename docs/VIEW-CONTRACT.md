@@ -53,9 +53,13 @@ Reglas:
   scheduler,      // avisos: { start, stop, inspect, onDuty, nextFor, testNotification }
   auth,           // { isSignedIn, currentUser, signOut, ... }
   navigate(view), // cambia de vista
-  openAssign(preset), openDay(date), openType(id), openMember(id), openExport(opts)
+  openAssign(preset), openDay(date), openMember(id), openExport(opts)
 }
 ```
+
+`openType(id)` ya **no** abre el editor de un turno: navega a la vista «Turnos»
+con ese turno señalado. El catálogo se gobierna en `js/ui/shift-catalog.js`
+(ver §11).
 
 **Importante:** `ctx.doc` es una referencia viva del store. Leerlo dentro de
 `render()` siempre, no capturarlo fuera.
@@ -174,7 +178,7 @@ De `../dialogs.js`:
 ```js
 openAssignDialog(ctx, { date, memberIds, typeId, rangeMode })
 openDayEditor(ctx, date)
-openTypeEditor(ctx, typeId | null, { onSaved })
+openTypeEditor(ctx, typeId | null, { onSaved, onDelete })  // crear/editar un turno
 openMemberEditor(ctx, memberId | null, { onSaved })
 openPatternDialog(ctx, { memberId, mode: 'pattern' | 'rotate' })
 openExportDialog(ctx, { from, to, presetMemberIds })
@@ -246,3 +250,43 @@ arrowRight info`.
 - No añadir `<style>` ni CSS en línea más allá de variables y posiciones
   porcentuales.
 - No usar `innerHTML` con datos que vengan del usuario o del documento.
+
+## 11. Una vista con la lógica en su propio módulo (Turnos)
+
+La vista **Turnos** (`VIEW = 'shifts'`, en `js/ui/views/shifts.js`) es una vista
+normal y corriente: se registra en `context.VIEWS`/`VIEW_TITLES`, tiene su
+`<section class="view" id="view-shifts">` y su botón en la navegación, y `app.js`
+la monta con las demás.
+
+Lo que tiene de particular es dónde vive su contenido. El catálogo —la lista y
+las acciones de crear, modificar, archivar y eliminar— está en
+`js/ui/shift-catalog.js`, que **no** es una vista:
+
+```js
+// js/ui/shift-catalog.js  (contenido de la vista Turnos)
+export function mount(ctx)                        // referencias + listeners, UNA vez
+export function render()                          // reconstruye la lista; lee con getContext()
+export function focusShiftCatalog(typeId | null)  // pinta y señala un turno
+```
+
+Se hace así porque al catálogo lo llaman dos sitios: su propia vista y el
+Cuadrante (`roster.js`), que trae al usuario aquí al tocar la leyenda. La vista
+es la puerta; el módulo es el dueño del catálogo. Reglas:
+
+- La vista llama a `mount(ctx)` en su `mount()` y a `render()` en su `render()`.
+  El módulo **no** se registra con `registerRenderer`: se repinta porque la vista
+  que lo hospeda se repinta (y porque `focusShiftCatalog` pinta antes de señalar).
+- El HTML del catálogo vive en `index.html` (contenedor, contador y botón de
+  añadir); las filas las construye el módulo.
+- Nada de la interfaz abre el editor de turnos fuera de aquí: el Cuadrante y
+  `ctx.openType(id)` solo navegan y señalan (`navigate('shifts')` +
+  `focusShift(id)`, reexportado por la vista).
+- El borrado lo gobierna el módulo, no el formulario: a `openTypeEditor` se le
+  pasa `onDelete`, porque es el módulo el que cuenta cuántos días del cuadrante
+  usan el turno, ofrece archivar como salida segura y deja el cambio en un solo
+  paso de deshacer.
+- Con rol de solo lectura (`teams.soloLectura(doc)`) los controles se
+  **desactivan** y se explica en la propia vista: no se esconden.
+
+Si otra vista necesita separar su lógica así, se documenta en este mismo
+apartado.

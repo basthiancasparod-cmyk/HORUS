@@ -15,3 +15,6 @@ claves*.txt
 # es público. Cada uno pone el suyo aquí en local para poder ejecutar
 # `node tests/import.mjs`, pero no se publica.
 tests/fixtures/*.pdf
+
+# Volcado local de una ejecución de `npm run verify`; no es código.
+verify-final*.txt

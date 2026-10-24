@@ -541,7 +541,7 @@ export async function probarConexion() {
       titulo: 'La clave vale, pero no has iniciado sesión',
       detalle: `El servidor ha aceptado la clave pública (la lectura de equipos responde «${citaClave}»)`
         + (citaRpc ? `, y sin cuenta la función de entrar en un equipo responde «${citaRpc}»` : '')
-        + '. Crear un equipo y sincronizar el cuadrante necesitan una cuenta: inicia sesión en «Cuenta y nube».',
+        + '. Crear un equipo y sincronizar el cuadrante necesitan una cuenta: inicia sesión en «Equipo y cuenta».',
     };
   }
 
@@ -646,19 +646,48 @@ function equipoDesdeFila(fila) {
  * @param {string} name nombre visible del equipo
  * @returns {Promise<{ok:boolean, equipo?:object, error?:string}>}
  */
+/** Decodifica el JWT (sin verificar firma) para obtener el `sub` = userId real. */
+function decodeJwtSub(token) {
+  try {
+    const payload = token.split('.')[1];
+    const json = atob(payload.replace(/-/g, '+').replace(/_/g, '/'));
+    return JSON.parse(json).sub;
+  } catch {
+    return null;
+  }
+}
+
 export async function createTeam(name) {
   const nombre = String(name ?? '').trim().slice(0, 60);
   if (!nombre) return { ok: false, error: 'Ponle un nombre al equipo.' };
-  const userId = usuarioActual();
+
+  // Usar SIEMPRE el `sub` del JWT actual (lo que el servidor ve como auth.uid()).
+  // Esto evita desincronización entre session.userId y el token real.
+  const { session } = await import('./auth.js');
+  const accessToken = session?.accessToken;
+  const jwtUserId = accessToken ? decodeJwtSub(accessToken) : null;
+  const sessionUserId = usuarioActual();
+
+  // Preferir el JWT; si falla, usar sesión como fallback
+  const userId = jwtUserId || sessionUserId;
+
   if (!userId) return { ok: false, error: SIN_SESION, code: 'no_session' };
+
+  // Validación: debe ser UUID válido
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+    return { ok: false, error: 'ID de usuario inválido en el token. Vuelve a iniciar sesión.', code: 'bad_session' };
+  }
+
+  // Log de diagnóstico: comparar JWT vs sesión
+  if (jwtUserId && sessionUserId && jwtUserId !== sessionUserId) {
+    console.warn('[createTeam] ⚠️ JWT.sub ≠ session.userId:', { jwt: jwtUserId, session: sessionUserId });
+  }
 
   let ultimoError = null;
   for (let intento = 0; intento < 3; intento++) {
-    const creado = await insertar(TABLES.teams, {
-      name: nombre,
-      invite_code: generarCodigoInvitacion(),
-      owner_id: userId,
-    });
+    const payload = { name: nombre, invite_code: generarCodigoInvitacion(), owner_id: userId };
+    console.log('[createTeam] Intento', intento + 1, 'payload:', payload);
+    const creado = await insertar(TABLES.teams, payload);
 
     if (!creado.ok) {
       // Choque de código de invitación (la tabla lo tiene `unique`): otro intento.

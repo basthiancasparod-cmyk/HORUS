@@ -76,7 +76,7 @@ function translate(payload, status) {
  * ------------------------------------------------------------------ */
 
 /** Dónde se arregla la configuración de la nube, dicho como lo ve el usuario. */
-const AJUSTES_NUBE = 'Ajustes → Nube';
+const AJUSTES_NUBE = 'Ajustes → Nube (Avanzado)';
 
 /**
  * Mensaje de cada falta, con la instrucción para resolverla. Se escribe entero

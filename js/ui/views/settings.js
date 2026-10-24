@@ -3,13 +3,18 @@
  * Vista de Ajustes: cuadrante, horas, festivos, avisos, apariencia, cuenta en
  * la nube, datos y zona delicada.
  *
+ * El CATÁLOGO de turnos NO se toca aquí: tiene su propia vista («Turnos», en
+ * js/ui/views/shifts.js, con la lógica en js/ui/shift-catalog.js). Ajustes no
+ * pone ni un botón para él a propósito: dos puertas para lo mismo es una
+ * invitación a que se desincronicen.
+ *
  * Es la vista con más formularios. Cada control se cablea UNA sola vez (con un
  * registro de «ya cableado») y el pintado solo sincroniza valores y visibilidad.
  */
 
 import { byId, el, clear, icon, $$, debounce, formatBytes, copyToClipboard } from '../../core/utils.js';
 import {
-  todayKey, monthKeyOf, monthDays, formatShortDate, blockMinutes, formatBlocks,
+  todayKey, monthKeyOf, monthDays, formatShortDate,
 } from '../../core/date.js';
 import * as storage from '../../core/storage.js';
 import { AI_PROVIDERS } from '../../core/ai-vision.js';
@@ -24,7 +29,7 @@ import {
   openDialog, closeDialog,
 } from '../toolkit.js';
 import {
-  openTypeEditor, openExportDialog, openBackupRestoreDialog, applyHolidays,
+  openExportDialog, openBackupRestoreDialog, applyHolidays,
   fillRegionSelect,
 } from '../dialogs.js';
 
@@ -32,6 +37,15 @@ export const VIEW = 'settings';
 
 let refs = null;
 const wired = new Set();
+
+/** Pestaña activa de Ajustes. */
+let activeTab = 'general';
+
+const TAB_INTRO = {
+  general: 'Apariencia, avisos y acceso a las herramientas menos usadas.',
+  team: 'Tu cuenta, el equipo con el que compartes el cuadrante y los roles.',
+  advanced: 'Configuración del cuadrante, festivos, importación, copias y zona delicada. Solo si sabes lo que tocas.',
+};
 
 /**
  * Referencia viva al contexto.
@@ -54,7 +68,6 @@ export function mount(ctx) {
     name: byId('settings-name'),
     weekstart: byId('settings-weekstart'),
     demand: byId('settings-demand'),
-    shiftTypes: byId('settings-shift-types'),
     weekly: byId('settings-weekly'),
     overtime: byId('settings-overtime'),
     region: byId('settings-region'),
@@ -106,12 +119,13 @@ export function mount(ctx) {
     teamIntro: byId('settings-team-intro'),
     teamCard: byId('settings-team-card'),
     teamActions: byId('settings-team-actions'),
-    teamCreate: byId('settings-team-create'),
     teamJoin: byId('settings-team-join'),
   };
 
   fillRegionSelect(refs.region, 'ES');
   wireSettings();
+  wireSettingsTabs();
+  paintSettingsTab(activeTab);
 
   // Al montar la vista se vuelve a mirar el equipo: montar significa que la
   // aplicación acaba de arrancar (o que se ha reemplazado el store), y lo que
@@ -120,6 +134,44 @@ export function mount(ctx) {
 
   registerRenderer(VIEW, render);
       // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
+}
+
+/* ------------------------------------------------------------------ *
+ * Pestañas de Ajustes
+ *
+ * Once bloques seguidos no son una pantalla de configuración: son un vertedero.
+ * Tres pestañas separan lo cotidiano de lo técnico, y la pestaña «Avanzado» es
+ * la única que conserva las opciones que parecían hechas para un solo cliente.
+ * ------------------------------------------------------------------ */
+
+function wireSettingsTabs() {
+  if (wired.has('tabs')) return;
+  wired.add('tabs');
+
+  for (const button of $$('.settings-tab[data-settings-tab]')) {
+    button.addEventListener('click', () => paintSettingsTab(button.dataset.settingsTab));
+  }
+  document.addEventListener('horus:settings-tab', (event) => {
+    paintSettingsTab(event.detail?.tab || 'general');
+  });
+}
+
+function paintSettingsTab(tab) {
+  activeTab = TAB_INTRO[tab] ? tab : 'general';
+
+  for (const button of $$('.settings-tab[data-settings-tab]')) {
+    const active = button.dataset.settingsTab === activeTab;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+    button.tabIndex = active ? 0 : -1;
+  }
+
+  for (const panel of $$('[data-settings-panel]')) {
+    panel.hidden = panel.dataset.settingsPanel !== activeTab;
+  }
+
+  const intro = byId('settings-tab-intro');
+  if (intro) intro.textContent = TAB_INTRO[activeTab];
 }
 
 /* ------------------------------------------------------------------ *
@@ -163,10 +215,6 @@ function wireSettings() {
       invalidate();
       // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
     });
-  });
-
-  once('shiftTypes', () => {
-    refs.shiftTypes.addEventListener('click', () => openShiftTypesManager(live));
   });
 
   /* ---------- Horas ---------- */
@@ -532,9 +580,8 @@ function wireSettings() {
   /* ---------- Equipo ---------- */
 
   once('team', () => {
-    refs.teamCreate.addEventListener('click', () => crearEquipo());
     refs.teamJoin.addEventListener('click', () => entrarConCodigo());
-    // La tarjeta del equipo se reconstruye entera en cada pintado, así que sus
+    // La tarjeta del equipo se reconstruye entera en cada repintado, así que sus
     // botones se atienden por delegación desde un contenedor que no cambia.
     refs.teamCard.addEventListener('click', onTeamCardClick);
     refs.teamCard.addEventListener('change', onTeamCardChange);
@@ -920,173 +967,6 @@ async function importCsvRows(rows, errors) {
 }
 
 /* ------------------------------------------------------------------ *
- * Gestor del catálogo de turnos (reutiliza #dialog-type)
- * ------------------------------------------------------------------ */
-
-let managerCleanup = null;
-
-function openShiftTypesManager(ctx = live) {
-  const dialog = byId('dialog-type');
-  const panel = dialog.querySelector('.dialog-panel');
-  const form = byId('form-type');
-  const footer = panel.querySelector('.dialog-footer');
-
-  const restore = () => {
-    form.hidden = false;
-    footer.hidden = false;
-    dialog.querySelector('.dialog-header h2').textContent = 'Tipo de turno';
-    byId('type-sub').textContent = '';
-    managerCleanup = null;
-  };
-
-  managerCleanup = restore;
-
-  // El formulario de edición se oculta y en su lugar va la lista
-  form.hidden = true;
-  footer.hidden = true;
-
-  const list = el('div', { class: 'dialog-body' });
-  panel.insertBefore(list, footer);
-
-  dialog.querySelector('.dialog-header h2').textContent = 'Catálogo de turnos';
-  byId('type-sub').textContent = 'Código, color, horario y personas necesarias de cada turno.';
-
-  const paint = () => {
-    clear(list);
-    const sorted = [...ctx.doc.shiftTypes].sort((a, b) => a.order - b.order);
-
-    for (const type of sorted) {
-      const used = ctx.doc.entries.filter((e) => e.typeId === type.id).length;
-      const total = type.blocks.reduce((acc, b) => acc + blockMinutes(b), 0);
-
-      const card = el('div', { class: 'type-card', style: { '--type-color': type.hex, marginBottom: 'var(--sp-2)' } }, [
-        el('span', {
-          class: 'type-code',
-          style: { background: type.hex, color: readableOnHex(type.hex) },
-        }, type.code),
-        el('div', { class: 'grow' }, [
-          el('div', { class: 'type-name' }, type.label),
-          el('div', { class: 'type-detail' }, describeType(type, used, total)),
-          type.blocks.length ? renderSchedulePreview(type) : null,
-        ]),
-        el('div', { class: 'type-actions' }, [
-          el('button', {
-            type: 'button', class: 'icon-btn', 'aria-label': `Editar ${type.label}`,
-            onclick: () => {
-              list.remove();
-              restore();
-              openTypeEditor(ctx, type.id, {
-                onSaved: () => {
-                  openShiftTypesManager(live);
-      // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
-                },
-              });
-            },
-          }, icon('edit', 16)),
-          el('button', {
-            type: 'button', class: 'icon-btn', 'aria-label': `Eliminar ${type.label}`,
-            onclick: async () => {
-              const ok = await confirmAction({
-                title: `¿Eliminar «${type.label}»?`,
-                message: used
-                  ? `Hay ${used} turno(s) con este tipo. No se perderán: conservarán su horario pero sin tipo asociado.`
-                  : 'Se quitará del catálogo de turnos.',
-                confirmLabel: 'Eliminar',
-              });
-              if (!ok) return;
-              ctx.actions.removeShiftType(type.id);
-              paint();
-      // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
-            },
-          }, icon('trash', 16)),
-        ]),
-      ]);
-      list.appendChild(card);
-    }
-
-    list.appendChild(el('button', {
-      type: 'button', class: 'btn btn-block', style: { marginTop: 'var(--sp-2)' },
-      onclick: () => {
-        list.remove();
-        restore();
-        openTypeEditor(ctx, null, {
-          onSaved: () => {
-            openShiftTypesManager(live);
-      // El repintado lo dispara la suscripción al store; aquí se leería el documento anterior.
-          },
-        });
-      },
-    }, [icon('plus', 16), 'Añadir un tipo de turno']));
-
-    list.appendChild(el('button', {
-      type: 'button', class: 'btn btn-block', style: { marginTop: 'var(--sp-2)' },
-      onclick: () => {
-        list.remove();
-        restore();
-        closeDialog(dialog);
-      },
-    }, 'Cerrar'));
-  };
-
-  dialog.addEventListener('close', () => {
-    if (managerCleanup) {
-      const cleanup = managerCleanup;
-      managerCleanup = null;
-      list.remove();
-      cleanup();
-    }
-  }, { once: true });
-
-  paint();
-  openDialog(dialog);
-}
-
-function describeType(type, used, minutes) {
-  const kindLabels = {
-    work: 'Turno trabajado',
-    leave: 'Vacaciones',
-    sick: 'Baja',
-    free: 'Libre',
-    rest: 'Festivo',
-  };
-  const parts = [kindLabels[type.kind] || type.kind];
-  if (type.kind === 'work' && minutes) parts.push(formatBlocks(type.blocks));
-  parts.push(`${used} turno${used === 1 ? '' : 's'}`);
-  parts.push(`hacen falta ${type.demand}`);
-  return parts.join(' · ');
-}
-
-/** Barra de 24 h con los tramos del horario del tipo. */
-function renderSchedulePreview(type) {
-  const box = el('div', { class: 'schedule-preview', style: { '--type-color': type.hex } });
-  for (const block of type.blocks) {
-    const [sh, sm] = String(block.start).split(':').map(Number);
-    const start = sh * 60 + (sm || 0);
-    const minutes = blockMinutes(block);
-    box.appendChild(el('div', {
-      class: 'seg',
-      style: {
-        left: `${(start / 1440) * 100}%`,
-        width: `${(Math.min(minutes, 1440 - start) / 1440) * 100}%`,
-      },
-      title: `${block.start}–${block.end}`,
-    }));
-  }
-  return box;
-}
-
-function readableOnHex(hex) {
-  const c = String(hex || '').replace('#', '');
-  if (c.length !== 6) return '#fff';
-  const r = parseInt(c.slice(0, 2), 16);
-  const g = parseInt(c.slice(2, 4), 16);
-  const b = parseInt(c.slice(4, 6), 16);
-  const s = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
-  const lum = 0.2126 * s(r) + 0.7152 * s(g) + 0.0722 * s(b);
-  return lum > 0.45 ? '#101319' : '#FFFFFF';
-}
-
-/* ------------------------------------------------------------------ *
  * EQUIPO
  *
  * Toda la gestión de equipos vive aquí, en Ajustes, y no en la vista
@@ -1201,12 +1081,16 @@ function paintTeam(ctx = live) {
     refs.teamIntro.textContent = 'Un equipo es un cuadrante compartido: cada persona entra con su cuenta '
       + 'y todos ven el mismo cuadrante. Lo que tienes en este dispositivo se queda como tu cuadrante personal.';
     if (refs.teamActions) refs.teamActions.hidden = false;
+    if (refs.teamJoin) refs.teamJoin.hidden = false;
     card.appendChild(tarjetaPersonal());
     return;
   }
 
   refs.teamIntro.textContent = `Este cuadrante es el de un equipo${teamData.equipo ? ` («${teamData.equipo.nombre}»)` : ''}.`;
-  if (refs.teamActions) refs.teamActions.hidden = true;
+  // «Ver personas y cargas» sigue disponible; lo que no tiene sentido estando
+  // dentro de un equipo es «Entrar con un código».
+  if (refs.teamActions) refs.teamActions.hidden = false;
+  if (refs.teamJoin) refs.teamJoin.hidden = true;
   card.appendChild(tarjetaEquipo({ teamId, rol, solo }));
 }
 
@@ -1216,7 +1100,7 @@ function tarjetaPersonal() {
 
   if (!auth.isSignedIn()) {
     cuerpo.appendChild(el('p', { class: 'field-hint' },
-      'Inicia sesión, en «Cuenta y nube», para crear un equipo o entrar en uno con un código.'));
+      'Inicia sesión en la tarjeta «Cuenta» para crear un equipo o entrar en uno con un código.'));
     return cuerpo;
   }
 
@@ -1233,8 +1117,8 @@ function tarjetaPersonal() {
         el('button', {
           type: 'button', class: 'btn btn-sm',
           'data-team-action': 'usar', 'data-team-id': equipo.id,
-          'aria-label': `Pasar este cuadrante al equipo ${equipo.nombre}`,
-        }, 'Usar este cuadrante'),
+          'aria-label': `Entrar en el equipo ${equipo.nombre}`,
+        }, 'Entrar en este equipo'),
       ]));
     }
   } else if (teamData.cargando) {
@@ -1483,7 +1367,13 @@ async function pasarAlEquipo(teamId, nombre, { yaConfirmado = false } = {}) {
     return;
   }
   teamData.clave = null; // fuerza a releer el equipo nuevo
+  storage.storage.set('horus.team.auto', '1');
+  storage.storage.set('horus.team.last', teamId);
+  storage.storage.set('horus.team.name', nombre);
   invalidate(VIEW);
+  // Cambiar de ámbito resetea las huellas: hay que bajar el equipo antes de
+  // subir nada. `sync()` ya baja primero.
+  live.runSync?.({ full: true });
   notify.success(`Este cuadrante es ahora el del equipo «${nombre}».`, {
     action: { label: 'Deshacer', onClick: () => live.undo() },
   });
@@ -1544,6 +1434,8 @@ async function salirDelEquipo() {
     return;
   }
   live.actions.changeScope(null);
+  storage.storage.set('horus.team.auto', '0');
+  storage.storage.remove('horus.team.last');
   teamData.clave = null;
   invalidate(VIEW);
   notify.success(`Has salido del equipo «${nombre}». Este cuadrante vuelve a ser el personal.`, {
@@ -1562,6 +1454,7 @@ async function volverAModoPersonal() {
   });
   if (!ok) return;
   if (!live.actions.changeScope(null)) return;
+  storage.storage.set('horus.team.auto', '0');
   teamData.clave = null;
   invalidate(VIEW);
   notify.success('Este cuadrante vuelve a ser tu cuadrante personal.', {
@@ -1580,7 +1473,7 @@ async function volverAModoPersonal() {
 
 /** Controles de Ajustes que escriben en el documento compartido. */
 const CONTROLES_ESCRITURA = [
-  'settings-name', 'settings-weekstart', 'settings-demand', 'settings-shift-types',
+  'settings-name', 'settings-weekstart', 'settings-demand',
   'settings-weekly', 'settings-overtime', 'settings-region',
   'settings-load-holidays', 'settings-clear-holidays',
   'settings-import-pdf', 'settings-import-csv',
@@ -1634,7 +1527,6 @@ function render() {
   if (document.activeElement !== refs.name) refs.name.value = doc.name;
   refs.weekstart.value = String(settings.weekStartsOn ?? 1);
   refs.demand.value = String(settings.coverage?.defaultDemand ?? 1);
-  refs.shiftTypes.textContent = `Editar el catálogo de turnos (${doc.shiftTypes.length})`;
 
   /* Horas */
   if (document.activeElement !== refs.weekly) refs.weekly.value = String(settings.hours?.weeklyTarget ?? 40);
@@ -1795,11 +1687,7 @@ function paintAccount(ctx = live) {
       el('button', {
         type: 'button', class: 'btn btn-sm',
         onclick: () => ctx.runSync({ manual: true, full: true }),
-      }, 'Sincronizar todo'),
-      el('button', {
-        type: 'button', class: 'btn btn-sm btn-danger',
-        onclick: () => wipeCloud(ctx),
-      }, 'Vaciar la nube'),
+      }, 'Sincronizar ahora'),
     ]),
   ]));
 }

@@ -258,22 +258,31 @@ await it('el editor de un día guarda notas y marca festivo', async () => {
   is(meta.dayType, 'holiday', 'y marcado como festivo');
 });
 
-await it('el catálogo de turnos se puede ampliar desde Ajustes', async () => {
+await it('el catálogo de turnos se puede ampliar desde la vista Turnos', async () => {
   const ctx = ctxNow();
-  ctx.navigate('settings');
+  ctx.navigate('shifts');
   await sleep(30);
-  env.document.getElementById('settings-shift-types').click();
-  ok(env.document.getElementById('dialog-type').open, 'el gestor de turnos se abre');
 
-  const addButton = [...env.document.getElementById('dialog-type').querySelectorAll('button')]
-    .find((b) => b.textContent.includes('Añadir un tipo de turno'));
-  ok(addButton, 'existe el botón de añadir');
-  addButton.click();
+  // La vista es la dueña del catálogo: el botón de añadir está en ella, no en
+  // un botón suelto dentro de Ajustes ni dentro del Cuadrante.
+  const lista = env.document.getElementById('shift-catalog-list');
+  ok(lista, 'existe la lista de turnos en la vista Turnos');
+  ok(lista.querySelector('.type-card'), 'y lista los turnos del catálogo');
+
+  env.document.getElementById('shift-catalog-add').click();
+  ok(env.document.getElementById('dialog-type').open, 'se abre el formulario de un turno');
   env.document.getElementById('type-code').value = 'R1';
   env.document.getElementById('type-label').value = 'Refuerzo';
   env.document.getElementById('form-type').requestSubmit();
   await sleep(30);
   ok(ctx.doc.shiftTypes.some((t) => t.code === 'R1'), 'el turno nuevo existe en el catálogo');
+
+  // Y se ve en la vista con su horario, sin abrir nada.
+  await sleep(30);
+  ctx.store.notify(); // el repintado va por frame: se fuerza para comprobarlo
+  await sleep(30);
+  ok(env.document.getElementById('shift-catalog-list').textContent.includes('9:00–17:00'),
+    'la vista enseña el horario del turno nuevo');
 });
 
 /* ==================================================================== *
@@ -400,9 +409,9 @@ await it('el cuadrante migrado se ve en el calendario', async () => {
 
 describe('Navegación');
 
-await it('se recorren las seis secciones', async () => {
+await it('se recorren las siete secciones', async () => {
   const ctx = ctxNow();
-  for (const view of ['today', 'calendar', 'roster', 'team', 'hours', 'settings']) {
+  for (const view of ['today', 'calendar', 'roster', 'shifts', 'team', 'hours', 'settings']) {
     ctx.navigate(view);
     await sleep(20);
     ok(env.document.getElementById(`view-${view}`).classList.contains('is-active'), `la sección ${view} se activa`);

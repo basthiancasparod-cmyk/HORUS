@@ -1112,6 +1112,181 @@ test('memoSelector cachea por revisión', () => {
 });
 
 /* ================================================================== *
+ * store.js — la huella de cambios
+ *
+ * PRUEBA DE LA CLASE DE FALLO, no de un caso suelto.
+ *
+ * El store decide si una acción «ha cambiado algo» comparando una huella del
+ * documento antes y después. Esa huella era una lista de campos escrita a mano
+ * y se quedó atrás cuando creció el modelo: de un tipo de turno no estaban
+ * `archived`, `countsHours`, `paid`, `order` ni `short`, así que un cambio que
+ * solo los tocara se descartaba en silencio (archivar un turno no hacía nada).
+ *
+ * Aquí se recorren TODOS los campos de todas las entidades: cambiar uno solo
+ * tiene que contar como cambio (guardarse, subir la revisión y poder
+ * deshacerse). Si mañana se añade un campo al modelo y se olvida la huella,
+ * esta prueba lo dice con el nombre del campo.
+ * ================================================================== */
+
+suite('store.js — la huella de cambios no se deja ningún campo');
+
+/** Campos que no son contenido: son marcas de reloj que mueve el propio store. */
+const CAMPOS_DE_RELOJ = new Set(['createdAt', 'updatedAt', 'updatedBy']);
+
+/** Campos del documento que van aparte o no son editables. */
+const FUERA_DEL_DOCUMENTO = new Set([
+  'rev', 'updatedAt', 'schema', 'members', 'shiftTypes', 'entries', 'patterns', 'dayMeta', 'settings',
+]);
+
+/** Valores de prueba: se usa el primero que la normalización no devuelva atrás. */
+const VALORES_DE_PRUEBA = [
+  true, false, 0, 1, 2, 'zz', 'light', '#0a0b0c', 'holiday', 'rest', 'texto de prueba',
+  [], ['zz'], { zz: 1 }, 'aaaaaaaa-0000-4000-8000-000000000001',
+];
+
+/** ¿Los dos valores representan el mismo contenido? */
+function mismoValor(a, b) {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** Store con una entidad de cada tipo, para poder tocar todos sus campos. */
+function storeConTodo() {
+  const doc = model.emptyDocument();
+  doc.members = [
+    model.createMember('Ana', { id: 'm_ana', role: 'owner', hex: '#F2A33C' }),
+    model.createMember('Luis', { id: 'm_luis', role: 'member', hex: '#5B8DEF' }),
+  ];
+  doc.meId = 'm_ana';
+  const manana = doc.shiftTypes.find((s) => s.code === 'M');
+  doc.entries = [model.createEntry({
+    id: 'e_1', memberId: 'm_ana', date: '2025-06-02', typeId: manana.id, notes: 'nota',
+  })];
+  doc.patterns = [model.createPattern({
+    id: 'p_1', name: 'Ciclo', cycle: [{ typeId: manana.id }], stepDays: 2, startDate: '2025-06-01',
+  })];
+  doc.dayMeta = { '2025-06-05': model.normalizeDayMeta({ dayType: 'holiday', label: 'Corpus', notes: 'x' }) };
+  return storeMod.createStore(doc);
+}
+
+/** Todos los campos mutables de todas las entidades, con su lectura/escritura. */
+function casosDeHuella(store) {
+  const doc = store.doc;
+  const casos = [];
+
+  const anadir = (etiqueta, campos, localizar, valores = VALORES_DE_PRUEBA) => {
+    for (const campo of campos) {
+      casos.push({
+        etiqueta: `${etiqueta}.${campo}`,
+        valores,
+        leer: (d) => localizar(d)?.[campo],
+        escribir: (d, valor) => { const e = localizar(d); if (e) e[campo] = valor; },
+      });
+    }
+  };
+
+  // Todos los campos de la entidad menos `id` (identifica) y las marcas de reloj.
+  const campos = (entidad) => Object.keys(entidad)
+    .filter((k) => k !== 'id' && !CAMPOS_DE_RELOJ.has(k))
+    .sort();
+
+  const miembros = ['m_luis'];   // para `memberId`/`meId` hace falta alguien que exista
+
+  anadir('miembro', campos(doc.members[0]), (d) => d.members[0]);
+  anadir('turno', campos(doc.shiftTypes[0]), (d) => d.shiftTypes[0]);
+  anadir('entrada', campos(doc.entries[0]), (d) => d.entries[0]);
+  anadir('entrada.memberId', ['memberId'], (d) => d.entries[0], miembros);
+  anadir('rotación', campos(doc.patterns[0]), (d) => d.patterns[0]);
+  anadir('día', campos(doc.dayMeta['2025-06-05']), (d) => d.dayMeta['2025-06-05']);
+  // `meId` se prueba aparte porque tiene que apuntar a alguien que exista.
+  anadir('documento', Object.keys(doc).filter((k) => !FUERA_DEL_DOCUMENTO.has(k) && k !== 'id' && k !== 'meId'), (d) => d);
+  anadir('documento.meId', ['meId'], (d) => d, miembros);
+
+  // Los ajustes van dentro del documento: se prueban un par de hojas.
+  const hojas = [
+    ['settings.theme', (d) => d.settings.theme, (d, v) => { d.settings.theme = v; }],
+    ['settings.weekStartsOn', (d) => d.settings.weekStartsOn, (d, v) => { d.settings.weekStartsOn = v; }],
+    ['settings.compactMode', (d) => d.settings.compactMode, (d, v) => { d.settings.compactMode = v; }],
+    ['settings.coverage.defaultDemand', (d) => d.settings.coverage.defaultDemand, (d, v) => { d.settings.coverage.defaultDemand = v; }],
+    ['settings.notifications.enabled', (d) => d.settings.notifications.enabled, (d, v) => { d.settings.notifications.enabled = v; }],
+  ];
+  for (const [etiqueta, leer, escribir] of hojas) casos.push({ etiqueta, leer, escribir, valores: VALORES_DE_PRUEBA });
+
+  return casos;
+}
+
+test('cambiar SOLO un campo cuenta como cambio, sube la revisión y se deshace', () => {
+  const store = storeConTodo();
+  const casos = casosDeHuella(store);
+
+  for (const caso of casos) {
+    const original = caso.leer(store.doc);
+    let probado = false;
+
+    for (const valor of caso.valores) {
+      if (mismoValor(valor, original)) continue;
+
+      const revAntes = store.doc.rev;
+      const cambio = store.apply((d) => caso.escribir(d, valor), { label: `prueba ${caso.etiqueta}` });
+      const aplicado = !mismoValor(caso.leer(store.doc), original);
+
+      if (!aplicado) {
+        // La normalización ha devuelto el valor atrás: ese valor no sirve para
+        // probar la huella (el campo no ha cambiado de verdad).
+        if (cambio) store.undo();
+        continue;
+      }
+
+      ok(cambio === true, `cambiar SOLO ${caso.etiqueta} (a ${JSON.stringify(valor)}) tiene que contar como cambio`);
+      ok(store.doc.rev > revAntes, `el cambio de ${caso.etiqueta} sube la revisión`);
+      ok(store.undo(), `el cambio de ${caso.etiqueta} se puede deshacer`);
+      ok(mismoValor(caso.leer(store.doc), original), `deshacer devuelve ${caso.etiqueta} a su valor`);
+
+      probado = true;
+      break;
+    }
+
+    ok(probado, `ningún valor de prueba ha servido para ${caso.etiqueta} (¿campo de solo lectura?)`);
+  }
+});
+
+test('la huella no se inventa cambios: repetir el mismo valor no ensucia el historial', () => {
+  const store = storeConTodo();
+  const manana = store.doc.shiftTypes[0];
+  const historial = store.historySize();
+
+  // El mismo valor, escrito otra vez: no hay cambio de contenido.
+  is(store.apply((d) => { d.shiftTypes[0].demand = manana.demand; }), false, 'repetir el valor no es un cambio');
+  // Y las marcas de reloj solas tampoco: `setEntry` reescribe `updatedAt` siempre.
+  is(store.apply((d) => { d.entries[0].updatedAt = Date.now(); }), false, 'una marca de reloj no es un cambio');
+  is(store.historySize(), historial, 'el historial no ha crecido');
+});
+
+test('después de un lote, la huella memorizada sigue siendo cierta', () => {
+  const store = storeConTodo();
+  const manana = store.doc.shiftTypes[0];
+
+  // Un lote muta el documento EN EL SITIO: si la huella memorizada se quedara
+  // apuntando a ese objeto, la comparación siguiente mentiría.
+  store.batch('archivar el turno', () => {
+    store.actions.updateShiftType(manana.id, { archived: true });
+  });
+  is(store.doc.shiftTypes.find((s) => s.id === manana.id).archived, true, 'el lote archiva de verdad');
+
+  is(store.apply((d) => { d.shiftTypes[0].demand = store.doc.shiftTypes[0].demand; }), false,
+    'repetir un valor sigue sin contar como cambio tras un lote');
+  is(store.apply((d) => { d.shiftTypes[0].demand += 1; }), true,
+    'y un cambio de verdad sigue contando como cambio tras un lote');
+
+  // Y deshacer devuelve también el archivado: el lote fue un paso de historial.
+  ok(store.undo(), 'el cambio de demanda se deshace');
+  is(store.doc.shiftTypes.find((s) => s.id === manana.id).demand, manana.demand, 'la demanda vuelve');
+  ok(store.undo(), 'y otro paso más deshace el archivado del lote');
+  is(store.doc.shiftTypes.find((s) => s.id === manana.id).archived, false, 'el turno deja de estar archivado');
+});
+
+/* ================================================================== *
  * storage.js
  * ================================================================== */
 

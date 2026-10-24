@@ -33,7 +33,27 @@
 // contestaba «No API key found in request». `config.js` está en el precache, así
 // que sin subir esto el navegador seguiría sirviendo el archivo viejo y el
 // arreglo no llegaría a quien lo necesita.
-const VERSION = 'v4.22.0';
+//
+// v4.24.0: el catálogo de turnos deja de estar enterrado en Ajustes (era un
+// botón suelto) y deja de poder tocarse desde el Cuadrante: ahora es una vista
+// propia en la navegación, con el horario de cada turno a la vista, con crear,
+// modificar, archivar y eliminar, y con un borrado que avisa de cuántos días del
+// cuadrante se ven afectados y se deshace de una vez. La lógica vive en
+// `js/ui/shift-catalog.js` y la vista en `js/ui/views/shifts.js`. Cambian
+// `index.html`, `css/app.css`, `app.js`, `context.js`, `dialogs.js`,
+// `settings.js`, `roster.js`, `store.js` y los dos módulos nuevos, todos en el
+// precache: sin subir la versión, el navegador seguiría sirviendo los archivos
+// viejos y el cambio no llegaría a nadie.
+// v5.0.0: reestructura de producto y arreglo del trabajo en equipo. La
+// sincronización baja antes de subir (una PC con datos viejos ya no pisa lo del
+// móvil), convierte los borrados locales en lápidas antes del pull y se repite
+// cada 30 s y al volver a la pestaña. Al iniciar sesión, la app adopta
+// automáticamente el equipo de la cuenta. La navegación se queda en Inicio,
+// Cuadrante, Equipo y Ajustes; Calendario, Turnos y Horas pasan a Herramientas,
+// y Ajustes se divide en General, Equipo y cuenta y Avanzado. Cambian
+// `index.html`, `css/app.css`, `app.js`, `sync.js`, `settings.js`, `teams.js`,
+// `context.js`, `auth.js` y `config.js`, todos en el precache.
+const VERSION = 'v5.0.0';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 
@@ -66,10 +86,12 @@ const PRECACHE = [
   './js/ui/context.js',
   './js/ui/toolkit.js',
   './js/ui/dialogs.js',
+  './js/ui/shift-catalog.js',
   './js/ui/import-review.js',
   './js/ui/views/today.js',
   './js/ui/views/calendar.js',
   './js/ui/views/roster.js',
+  './js/ui/views/shifts.js',
   './js/ui/views/team.js',
   './js/ui/views/hours.js',
   './js/ui/views/settings.js',

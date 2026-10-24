@@ -58,6 +58,7 @@ import {
   notify, confirmAction, avatar, fillSelect, emptyState,
 } from '../toolkit.js';
 import * as dialogs from '../dialogs.js';
+import { focusShift } from './shifts.js';
 import * as teams from '../../core/teams.js';
 
 /** Identificador de la vista; debe coincidir con `context.VIEWS`. */
@@ -852,13 +853,15 @@ function paintLegend(doc, ctx) {
       type: 'button',
       class: 'badge badge-solid',
       style: { '--type-color': hex, '--type-fg': readableOn(hex) },
-      title: blocks.length ? `${type.label} · ${blockRange(blocks)}` : type.label,
-      onclick: () => dialogs.openTypeEditor(ctx, type.id),
+      title: blocks.length ? `${type.label} · ${blockRange(blocks)} · ver en Turnos` : `${type.label} · ver en Turnos`,
+      onclick: () => verTurnoEnElCatalogo(ctx, type.id),
     }, [
       el('span', { class: 'dot', style: { background: hex } }),
       `${type.code} · ${type.label}`,
     ]));
   }
+
+  dom.legend.appendChild(el('span', { class: 't-2xs t-muted' }, 'Toca un turno para verlo en la sección Turnos'));
 
   dom.legend.appendChild(el('span', { class: 't-2xs t-muted' }, '🌙 cruza medianoche'));
 
@@ -870,6 +873,19 @@ function paintLegend(doc, ctx) {
       invalidate(VIEW);
     },
   }, [icon('calendar', 14), 'Ir a hoy']));
+}
+
+/**
+ * Lleva el turno a su sitio: el catálogo tiene su propia vista («Turnos»).
+ *
+ * El Cuadrante es quién trabaja cuándo. Abrir aquí el editor de un turno era
+ * una puerta de más: un clic en la leyenda cambiaba el horario de TODO el
+ * equipo creyendo que se tocaba la rejilla. Ahora solo se navega; editar se
+ * hace donde se ve el catálogo entero.
+ */
+function verTurnoEnElCatalogo(ctx, typeId) {
+  ctx.navigate('shifts');
+  focusShift(typeId);
 }
 
 /* ==================================================================== *

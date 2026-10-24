@@ -4,7 +4,7 @@
  *
  * La clave pública de Supabase va en el cliente por diseño y lo que protege los
  * datos son las políticas RLS del servidor. Aun así, se puede sobrescribir desde
- * Ajustes → Nube (se guarda en localStorage), de modo que si publicas el
+ * Ajustes → Nube (pestaña Avanzado) (se guarda en localStorage), de modo que si publicas el
  * repositorio puedas usar tu propio proyecto sin tocar código.
  *
  * Supabase emite HOY dos formas de clave pública y las dos valen aquí:
@@ -91,7 +91,7 @@ export const CLOUD_SCHEMA = 4;
 /** Nombre de la app y metadatos de exportación. */
 export const APP = {
   name: 'HORUS',
-  version: '4.0.0',
+  version: '5.0.0',
   tagline: 'Cuadrante de turnos del equipo',
   exportPrefix: 'horus',
 };

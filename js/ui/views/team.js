@@ -17,6 +17,8 @@ import {
 import { avatar, barRow, emptyState, notify, confirmAction } from '../toolkit.js';
 import * as dialogs from '../dialogs.js';
 import * as teams from '../../core/teams.js';
+import * as auth from '../../core/auth.js';
+import * as storage from '../../core/storage.js';
 import {
   analyzeMonth, findConflicts, summarizeMonth, weeklyBreakdown,
 } from '../../core/coverage.js';
@@ -124,6 +126,7 @@ export function mount(ctx) {
   refs = {
     sub: byId('team-sub'),
     add: byId('team-add'),
+    create: byId('team-create'),
     stats: byId('team-stats'),
     count: byId('team-count'),
     list: byId('team-list'),
@@ -134,9 +137,12 @@ export function mount(ctx) {
     alerts: byId('team-alerts'),
   };
 
-  // «Añadir» abre el editor de personas en blanco.
+  // «Crear equipo» crea un equipo compartido y pasa el cuadrante a él.
+  refs.create?.addEventListener('click', crearEquipo);
+
+  // «Añadir persona» abre el editor de personas en blanco.
   refs.add?.addEventListener('click', () => {
-    dialogs.openMemberEditor(ctx, null);
+    dialogs.openMemberEditor(getContext(), null);
   });
 
   registerRenderer(VIEW, render);
@@ -758,4 +764,78 @@ function renderAlerts(ctx, doc, { members, weeksByMember, conflicts, days, from,
         : null,
     ]));
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Crear equipo (movido desde Ajustes)
+ * ------------------------------------------------------------------ */
+
+/** Texto del paso delicado: qué le pasa al cuadrante al irse a un equipo. */
+const AVISO_MUDANZA = 'Tu cuadrante de este dispositivo pasará a ser el del equipo y se subirá a la nube. '
+  + 'Si el equipo ya tenía turnos, los que coincidan se sobrescribirán. '
+  + 'Tu cuadrante personal seguirá guardado en la nube por si quieres volver.';
+
+/** Crea un equipo y pasa el cuadrante a él. */
+async function crearEquipo() {
+  const ctx = getContext();
+  if (!auth.isSignedIn()) {
+    notify.warning('Inicia sesión para crear un equipo.');
+    return;
+  }
+  const campo = el('div', { class: 'field' }, [
+    el('label', { class: 'field-label', for: 'team-create-name' }, 'Nombre del equipo'),
+    el('input', {
+      class: 'input', type: 'text', id: 'team-create-name', maxlength: '60',
+      placeholder: 'Ej.: Cuadrante de mañanas',
+    }),
+  ]);
+  const ok = await confirmAction({
+    title: 'Crear un equipo',
+    message: `${AVISO_MUDANZA} Ponle un nombre y se creará con su código de invitación.`,
+    confirmLabel: 'Crear el equipo',
+    danger: false,
+    extra: campo,
+  });
+  if (!ok) return;
+
+  const nombre = (byId('team-create-name')?.value || '').trim();
+  if (!nombre) {
+    notify.error('El equipo necesita un nombre.');
+    return;
+  }
+
+  const res = await teams.createTeam(nombre);
+  if (!res.ok) {
+    notify.error(res.error);
+    return;
+  }
+  await pasarAlEquipo(res.equipo.id, res.equipo.nombre, { yaConfirmado: true });
+}
+
+/** Pasa el cuadrante al equipo indicado, con la confirmación del paso delicado. */
+async function pasarAlEquipo(teamId, nombre, { yaConfirmado = false } = {}) {
+  const ctx = getContext();
+  if (!yaConfirmado) {
+    const ok = await confirmAction({
+      title: `¿Pasar el cuadrante al equipo «${nombre}»?`,
+      message: AVISO_MUDANZA,
+      confirmLabel: 'Pasar al equipo',
+      danger: false,
+    });
+    if (!ok) return;
+  }
+
+  // Cambia el ámbito del documento al equipo nuevo.
+  ctx.actions.changeScope(teamId);
+  storage.storage.set('horus.team.auto', '1');
+  storage.storage.set('horus.team.last', teamId);
+  storage.storage.set('horus.team.name', nombre);
+  ctx.runSync?.({ full: true });
+  notify.success(`Cuadrante pasado al equipo «${nombre}»`, {
+    action: { label: 'Deshacer', onClick: () => ctx.undo() },
+  });
+  invalidate('calendar');
+  invalidate('roster');
+  invalidate('hours');
+  invalidate(VIEW);
 }

@@ -210,10 +210,32 @@ La versión actual sincroniza **entidad por entidad**:
    de identificadores conocidos y una huella por fila.
 2. Comparar la huella actual con la guardada dice exactamente qué filas son
    nuevas, modificadas o borradas. Nada de esto vive dentro del documento.
-3. Sube solo lo que cambió, en lotes de 400 filas, respetando el orden de
-   dependencias (primero tipos y personas, después entradas).
-4. Baja lo que haya cambiado desde la última marca de agua, y fusiona **fila a
-   fila**: gana la marca `updatedAt` más reciente.
+3. **Baja primero** lo que haya cambiado desde la última marca de agua y fusiona
+   **fila a fila**: gana la marca `updatedAt` más reciente. Los borrados locales
+   se convierten en lápidas antes del pull para que una fila que aún vive en el
+   servidor no resucite.
+4. **Después sube** solo lo que sigue pendiente, en lotes de 400 filas,
+   respetando el orden de dependencias (primero tipos y personas, después
+   entradas). Subir antes de bajar era un error grave: una PC con datos viejos
+   pisaba en el servidor lo que el móvil acababa de escribir.
+
+### El equipo se adopta al iniciar sesión
+
+`teamId` vive en el documento local, no en la cuenta. Por eso una PC que nunca
+había abierto el equipo se quedaba en el ámbito personal y no veía nada de lo
+que se subía desde el móvil. Al arrancar con sesión, `adoptTeamWorkspace()`
+pregunta a `horus_team_members` a qué equipos pertenece la cuenta y entra en el
+último usado (o en el único que haya). El primer cambio de ámbito usa un pull
+`replace`: el cuadrante personal de esa PC no se sube al equipo, y antes de
+reemplazarlo queda una copia en las copias rotativas.
+
+### Refresco sin recargar
+
+La sincronización no depende de que el usuario pulse nada: cada 30 s (solo con
+la pestaña visible), al volver a la pestaña, al recuperar el foco y al volver la
+conexión se hace un ciclo incremental. Sin esto, los cambios de otros miembros
+solo aparecían al recargar, que es exactamente el síntoma de «no se sincroniza».
+
 
 ### Decisiones que evitan errores concretos
 
@@ -325,6 +347,14 @@ El formato concreto del cuadrante analizado, con las coordenadas medidas, está 
 
 ## 10. Interfaz
 
+- **Cuatro secciones de primer nivel:** Inicio, Cuadrante, Equipo y Ajustes.
+  Calendario, Horas y Turnos siguen existiendo, pero viven en Ajustes → General →
+  Herramientas y en el «Más» del móvil. La barra dejó de ser un índice de todo.
+- **Ajustes en tres pestañas:** General, Equipo y cuenta, y Avanzado. Lo técnico
+  (IA, Supabase propio, importaciones, copias y zona delicada) queda en Avanzado.
+- **Indicador de espacio de trabajo:** la cabecera dice «Personal» o el nombre del
+  equipo y lleva a la pestaña del equipo. Sin él, era imposible saber por qué no
+  aparecían los turnos del resto.
 - **`context.js`** centraliza navegación, fecha en foco, filtros y repintado. El
   repintado se agenda por frame y **solo se ejecuta para la vista visible**:
   cambiar un turno no vuelve a pintar las seis secciones.
