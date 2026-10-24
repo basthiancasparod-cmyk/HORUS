@@ -637,6 +637,9 @@ function wireSettings() {
         confirmLabel: 'Sí, borrar todo',
       });
       if (!sure) return;
+      // Primero se bloquean las escrituras: si no, `beforeunload` guarda el
+      // documento actual justo antes de recargar y los datos vuelven a aparecer.
+      storage.suspendWrites();
       storage.clearAll();
       notify.info('Todo borrado. Recargando…', { duration: 1500 });
       setTimeout(() => window.location.reload(), 1200);

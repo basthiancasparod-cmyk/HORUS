@@ -91,7 +91,7 @@ export const CLOUD_SCHEMA = 4;
 /** Nombre de la app y metadatos de exportación. */
 export const APP = {
   name: 'HORUS',
-  version: '5.0.0',
+  version: '5.0.1',
   tagline: 'Cuadrante de turnos del equipo',
   exportPrefix: 'horus',
 };

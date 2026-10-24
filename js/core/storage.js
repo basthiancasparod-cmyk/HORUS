@@ -162,6 +162,9 @@ export function readLegacyBackup() {
  * @param {{backup?:boolean}} [opts]
  */
 export function writeDocument(doc, { backup = true } = {}) {
+  // Tras «Empezar de cero» no se puede volver a escribir: el `beforeunload`
+  // resucitaría el documento que se acaba de borrar.
+  if (writesSuspended) return false;
   const text = JSON.stringify(doc);
   if (backup) {
     const previous = storage.get(KEY_DOC);
@@ -245,9 +248,33 @@ export function clearAll({ includeBackups = true } = {}) {
   for (const k of keys) {
     if (!k.startsWith('horus.') && k !== OLD_DB_KEY) continue;
     if (!includeBackups && (k.startsWith('horus.bak.') || k === KEY_LEGACY_BACKUP)) continue;
-    if (k === KEY_UI) continue; // las preferencias visuales se conservan
+    // La configuración de la nube NO es un dato del cuadrante: es la dirección
+    // del servidor. Si «Empezar de cero» la borrara, la app volvería al servidor
+    // por defecto (que puede no existir) y parecería que el borrado la ha roto.
+    if (k === KEY_UI || k === 'horus.cloud') continue;
     storage.remove(k);
   }
+}
+
+/**
+ * Bloquea las escrituras del documento hasta que se recargue la página.
+ *
+ * Lo usa «Empezar de cero». Sin esto, el manejador de `beforeunload` de
+ * `app.js` volvía a escribir el documento justo antes de recargar y los datos
+ * reaparecían: el borrado parecía no hacer nada.
+ */
+let writesSuspended = false;
+
+export function suspendWrites() {
+  writesSuspended = true;
+}
+
+export function resumeWrites() {
+  writesSuspended = false;
+}
+
+export function writesAreSuspended() {
+  return writesSuspended;
 }
 
 /* ------------------------------------------------------------------ *

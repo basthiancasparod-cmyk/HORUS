@@ -964,9 +964,9 @@ export function createSyncEngine(deps) {
    * (gana la marca más reciente de cada fila) y solo después se sube lo que de
    * verdad sigue pendiente.
    *
-   * @param {{full?:boolean, silent?:boolean}} [opts]
+   * @param {{full?:boolean, silent?:boolean, ignoreOnline?:boolean}} [opts]
    */
-  async function sync({ full = false, silent = false } = {}) {
+  async function sync({ full = false, silent = false, ignoreOnline = false } = {}) {
     // Si ya hay una sincronización en marcha se devuelve la última conocida. OJO:
     // en la primerísima sincronización `lastResult` todavía es null, y devolver
     // null hacía que quien llama (app.js) reventara al leer `result.pushed`.
@@ -975,7 +975,11 @@ export function createSyncEngine(deps) {
       setStatus(STATUS.offline, null);
       return { skipped: true, reason: 'no-session' };
     }
-    if (!navigator.onLine) {
+    // `ignoreOnline` lo usa el botón manual: `navigator.onLine` miente en
+    // bastantes redes (VPN, adaptadores virtuales, modo avión mal apagado).
+    // Un intento real dice si el servidor responde; si no, el error es concreto
+    // en vez de un «sin conexión» que no deja avanzar.
+    if (!ignoreOnline && !navigator.onLine) {
       setStatus(STATUS.offline, null);
       return { skipped: true, reason: 'offline' };
     }

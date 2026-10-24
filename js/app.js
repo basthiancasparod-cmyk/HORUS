@@ -62,6 +62,7 @@ let localMode = false;
 let clockTimer = null;
 let syncPendingTimer = null;
 let backgroundSyncTimer = null;
+let serverReachable = false;
 let mediaTheme = null;
 let workspaceInfo = { id: null, name: '' };
 
@@ -360,7 +361,7 @@ function setStatus({ text, kind = 'offline', action = null, sticky = false }) {
 }
 
 function paintConnectivity() {
-  if (!navigator.onLine) {
+  if (!navigator.onLine && !serverReachable) {
     setStatus({
       text: 'Sin conexión · trabajando en local. Los cambios se guardarán solos.',
       kind: 'offline',
@@ -525,10 +526,11 @@ async function runSync({ manual = false, full = false } = {}) {
     if (manual) notify.warning('Inicia sesión para sincronizar con la nube.');
     return;
   }
-  if (!navigator.onLine) {
-    if (manual) notify.warning('Sin conexión: se sincronizará cuando vuelvas a estar en línea.');
-    return;
-  }
+  // `navigator.onLine` puede decir «sin conexión» aunque la red funcione. Si
+  // el usuario pulsa Sincronizar, se intenta de verdad y se le enseña el error
+  // concreto del servidor; el refresco automático sí se salta cuando no hay red.
+  const offlineNav = !navigator.onLine;
+  if (offlineNav && !manual) return;
 
   const icon = byId('sync-icon');
   const button = byId('btn-sync');
@@ -541,7 +543,7 @@ async function runSync({ manual = false, full = false } = {}) {
   }
 
   try {
-    const result = await sync.sync({ full });
+    const result = await sync.sync({ full, ignoreOnline: manual });
     // `sync()` puede devolver null (o nada) si ya había otra sincronización en
     // marcha: sin esta guarda, leer `result.pushed` lanzaba un TypeError que se
     // veía en consola como «error de sincronización» sin más explicación.
@@ -550,16 +552,29 @@ async function runSync({ manual = false, full = false } = {}) {
       return;
     }
     if (result.skipped) {
+      if (result.reason === 'offline') {
+        serverReachable = false;
+        if (manual) {
+          setStatus({
+            text: navigator.onLine
+              ? 'No se pudo conectar con el servidor de la nube. Revisa Ajustes → Avanzado → Nube.'
+              : 'Sin conexión: se reintentará solo.',
+            kind: 'warning',
+            sticky: true,
+            action: { label: 'Reintentar', onClick: () => runSync({ manual: true }) },
+          });
+        }
+        return;
+      }
       if (manual) {
         setStatus({
-          text: result.reason === 'offline'
-            ? 'Sin conexión: se reintentará solo.'
-            : 'Sin cuenta configurada: los datos se quedan en este dispositivo.',
-          kind: result.reason === 'offline' ? 'warning' : 'success',
+          text: 'Sin cuenta configurada: los datos se quedan en este dispositivo.',
+          kind: 'success',
         });
       }
       return;
     }
+    serverReachable = true;
     const parts = [];
     if (result.pushed) parts.push(`${result.pushed} subido(s)`);
     if (result.applied) parts.push(`${result.applied} recibido(s)`);
@@ -589,6 +604,7 @@ async function runSync({ manual = false, full = false } = {}) {
     }
   } catch (err) {
     console.error('[app] error de sincronización:', err);
+    serverReachable = false;
     // El error crítico de puesta en marcha no es de red: es que el proyecto de
     // Supabase no tiene aplicada la migración de equipo. Sin este texto, el
     // usuario ve «column owner_key does not exist» y no sabe qué hacer.
@@ -1582,6 +1598,7 @@ async function onOnline() {
 }
 
 function onOffline() {
+  serverReachable = false;
   paintConnectivity();
   notify.warning('Sin conexión: sigues trabajando en local.', { duration: 2600 });
 }

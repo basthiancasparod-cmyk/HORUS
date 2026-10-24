@@ -53,7 +53,11 @@
 // y Ajustes se divide en General, Equipo y cuenta y Avanzado. Cambian
 // `index.html`, `css/app.css`, `app.js`, `sync.js`, `settings.js`, `teams.js`,
 // `context.js`, `auth.js` y `config.js`, todos en el precache.
-const VERSION = 'v5.0.0';
+// v5.0.1: «Empezar de cero» ya no se queda a medias. El `close` tardío de la
+// primera confirmación cerraba la segunda, y `beforeunload` volvía a guardar el
+// documento justo antes de recargar. Además, borrar los datos ya no borra la
+// URL/clave de la nube configurada.
+const VERSION = 'v5.0.1';
 const CACHE = `horus-${VERSION}`;
 const RUNTIME = `horus-runtime-${VERSION}`;
 

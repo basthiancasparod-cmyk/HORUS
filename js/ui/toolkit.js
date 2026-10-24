@@ -159,7 +159,20 @@ export function confirmAction(opts = {}) {
     };
     const onOk = () => finish(true);
     const onCancel = () => finish(false);
-    const onClose = () => finish(false);
+    /**
+     * `finish()` cierra el diálogo con `close()`, y ese `close` se dispara en una
+     * tarea posterior. Si el usuario encadena dos confirmaciones (por ejemplo
+     * «Empezar de cero»), el `close` de la PRIMERA llegaba cuando la SEGUNDA ya
+     * estaba abierta y la cerraba antes de que se viera: el título cambiaba,
+     * el diálogo se quedaba cerrado y no se ejecutaba nada.
+     *
+     * Por eso solo cuenta un `close` cuando el diálogo ya está cerrado; si
+     * sigue abierto, es el evento tardío de la confirmación anterior.
+     */
+    const onClose = () => {
+      if (dialog.open) return;
+      finish(false);
+    };
 
     okBtn.addEventListener('click', onOk);
     cancelBtn.addEventListener('click', onCancel);

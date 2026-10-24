@@ -1389,13 +1389,27 @@ test('storageStats informa del espacio ocupado', () => {
   is(stats.backend, 'localStorage');
 });
 
-test('clearAll respeta las preferencias de interfaz', () => {
+test('clearAll respeta las preferencias de interfaz y la configuración de la nube', () => {
   memoryStore.clear();
   storage.writeDocument(model.bootstrapDocument({ name: 'Ana' }));
   storage.saveUI({ lastView: 'calendar' });
+  localStorage.setItem('horus.cloud', JSON.stringify({ url: 'https://mi-proyecto.supabase.co', anonKey: 'x' }));
   storage.clearAll();
   is(localStorage.getItem(storage.KEY_DOC), null);
   is(storage.loadUI().lastView, 'calendar', 'la preferencia visual se conserva');
+  ok(localStorage.getItem('horus.cloud'), 'la dirección de la nube no se borra');
+});
+
+test('tras empezar de cero, el guardado de salida no resucita el documento', () => {
+  memoryStore.clear();
+  storage.writeDocument(model.bootstrapDocument({ name: 'Ana' }));
+  // Lo que hace Ajustes → «Empezar de cero».
+  storage.suspendWrites();
+  storage.clearAll();
+  // Y lo que hace `beforeunload` justo después.
+  storage.writeDocument(model.bootstrapDocument({ name: 'Ana' }), { backup: false });
+  is(localStorage.getItem(storage.KEY_DOC), null, 'el documento sigue borrado');
+  storage.resumeWrites();
 });
 
 function writeOk(result) {
