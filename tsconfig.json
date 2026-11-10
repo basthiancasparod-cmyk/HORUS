@@ -1,0 +1,1 @@
+{"compilerOptions":{"esModuleInterop":true,"forceConsistentCasingInFileNames":true,"module":"CommonJS","moduleResolution":"Node","skipLibCheck":true,"strict":true,"target":"ES2022"},"include":["playwright.config.ts","tests-e2e/**/*.ts"]}

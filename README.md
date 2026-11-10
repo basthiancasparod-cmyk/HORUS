@@ -271,6 +271,7 @@ docs/
 ```bash
 npm run verify     # comprobación estática + orden del SQL + las 7 suites
 npm test           # solo las suites
+npm run test:e2e   # pruebas de navegador (Playwright + TypeScript, en `tests-e2e/`)
 npm run check:sql  # solo el orden de las definiciones de la migración
 ```
 
@@ -283,6 +284,7 @@ npm run check:sql  # solo el orden de las definiciones de la migración
 | `tests/app.mjs` | Arranque real: asistente, uso, recarga, migración, exportación y solo lectura por rol | 23 |
 | `tests/import.mjs` | Importación del cuadrante desde un PDF real: lectura, rejilla, verdad de referencia y volcado | 39 |
 | `tests/ai.mjs` | Importación con IA: proveedores, prompts, reintentos y verificación de lo leído | 35 |
+| `tests-e2e/` | Navegador real (Playwright): asistente, validación de acceso, cuadrante, calendario, horas y exportación, en modo local sin cuenta | 10 |
 | `tools/check.mjs` | Enlazado de módulos, ids del HTML, clases CSS, precache, manifiesto | — |
 | `tools/sql-order.mjs` | Orden de las definiciones de la migración de Supabase (evita el `42P01`) | — |
 

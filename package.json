@@ -13,6 +13,7 @@
     "test:app": "node tests/app.mjs",
     "test:import": "node tests/import.mjs",
     "test:ai": "node tests/ai.mjs",
+    "test:e2e": "playwright test",
     "check": "node tools/check.mjs",
     "check:sql": "node tools/sql-order.mjs",
     "verify": "npm run check && npm run check:sql && npm test",
@@ -23,6 +24,15 @@
   "engines": {
     "node": ">=18"
   },
-  "keywords": ["turnos", "calendario", "equipo", "pwa"],
-  "license": "MIT"
+  "keywords": [
+    "turnos",
+    "calendario",
+    "equipo",
+    "pwa"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "typescript": "^5.9.3"
+  }
 }
